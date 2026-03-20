@@ -1,0 +1,5 @@
+Collecting protobuf
+  Downloading protobuf-7.34.0-cp310-abi3-macosx_10_9_universal2.whl.metadata (595 bytes)
+Downloading protobuf-7.34.0-cp310-abi3-macosx_10_9_universal2.whl (429 kB)
+Installing collected packages: protobuf
+Successfully installed protobuf-7.34.0

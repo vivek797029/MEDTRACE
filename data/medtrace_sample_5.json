@@ -1,0 +1,62 @@
+[
+  {
+    "input": "You are a clinical reasoning system. Given a medical question,\nproduce a structured reasoning chain where EVERY step is independently verifiable.\n\nQuestion: A 23-year-old pregnant woman at 22 weeks gestation presents with burning upon urination. She states it started 1 day ago and has been worsening despite drinking more water and taking cranberry extract. She otherwise feels well and is followed by a doctor for her pregnancy. Her temperature is 97.7\u00b0F (36.5\u00b0C), blood pressure is 122/77 mmHg, pulse is 80/min, respirations are 19/min, and oxygen saturation is 98% on room air. Physical exam is notable for an absence of costovertebral angle tenderness and a gravid uterus. Which of the following is the best treatment for this patient?\n\nOptions:\n  A. Ampicillin\n  B. Ceftriaxone\n  C. Doxycycline\n  D. Nitrofurantoin\n\nGenerate a reasoning chain in this EXACT format:\n\nREASONING_CHAIN:\n[STEP 1 | type: symptom/finding | source: patient_data]\n<extract key clinical information from the question>\n[STEP 2 | type: mechanism | source: medical_knowledge]\n<explain the relevant pathophysiology>\n[STEP 3 | type: rule | source: clinical_guideline | depends_on: 1,2]\n<cite the relevant clinical rule or guideline>\n[STEP 4 | type: inference | source: logical_deduction | depends_on: 1,2,3]\n<combine previous steps to narrow down>\n[STEP 5 | type: conclusion | source: logical_deduction | depends_on: 1,2,3,4]\n<state final answer with justification>\n\nANSWER: <correct option letter>",
+    "answer": "Nitrofurantoin",
+    "answer_idx": "D",
+    "options": {
+      "A": "Ampicillin",
+      "B": "Ceftriaxone",
+      "C": "Doxycycline",
+      "D": "Nitrofurantoin"
+    },
+    "question": "A 23-year-old pregnant woman at 22 weeks gestation presents with burning upon urination. She states it started 1 day ago and has been worsening despite drinking more water and taking cranberry extract. She otherwise feels well and is followed by a doctor for her pregnancy. Her temperature is 97.7\u00b0F (36.5\u00b0C), blood pressure is 122/77 mmHg, pulse is 80/min, respirations are 19/min, and oxygen saturation is 98% on room air. Physical exam is notable for an absence of costovertebral angle tenderness and a gravid uterus. Which of the following is the best treatment for this patient?"
+  },
+  {
+    "input": "You are a clinical reasoning system. Given a medical question,\nproduce a structured reasoning chain where EVERY step is independently verifiable.\n\nQuestion: A 3-month-old baby died suddenly at night while asleep. His mother noticed that he had died only after she awoke in the morning. No cause of death was determined based on the autopsy. Which of the following precautions could have prevented the death of the baby?\n\nOptions:\n  A. Placing the infant in a supine position on a firm mattress while sleeping\n  B. Keeping the infant covered and maintaining a high room temperature\n  C. Application of a device to maintain the sleeping position\n  D. Avoiding pacifier use during sleep\n\nGenerate a reasoning chain in this EXACT format:\n\nREASONING_CHAIN:\n[STEP 1 | type: symptom/finding | source: patient_data]\n<extract key clinical information from the question>\n[STEP 2 | type: mechanism | source: medical_knowledge]\n<explain the relevant pathophysiology>\n[STEP 3 | type: rule | source: clinical_guideline | depends_on: 1,2]\n<cite the relevant clinical rule or guideline>\n[STEP 4 | type: inference | source: logical_deduction | depends_on: 1,2,3]\n<combine previous steps to narrow down>\n[STEP 5 | type: conclusion | source: logical_deduction | depends_on: 1,2,3,4]\n<state final answer with justification>\n\nANSWER: <correct option letter>",
+    "answer": "Placing the infant in a supine position on a firm mattress while sleeping",
+    "answer_idx": "A",
+    "options": {
+      "A": "Placing the infant in a supine position on a firm mattress while sleeping",
+      "B": "Keeping the infant covered and maintaining a high room temperature",
+      "C": "Application of a device to maintain the sleeping position",
+      "D": "Avoiding pacifier use during sleep"
+    },
+    "question": "A 3-month-old baby died suddenly at night while asleep. His mother noticed that he had died only after she awoke in the morning. No cause of death was determined based on the autopsy. Which of the following precautions could have prevented the death of the baby?"
+  },
+  {
+    "input": "You are a clinical reasoning system. Given a medical question,\nproduce a structured reasoning chain where EVERY step is independently verifiable.\n\nQuestion: A mother brings her 3-week-old infant to the pediatrician's office because she is concerned about his feeding habits. He was born without complications and has not had any medical problems up until this time. However, for the past 4 days, he has been fussy, is regurgitating all of his feeds, and his vomit is yellow in color. On physical exam, the child's abdomen is minimally distended but no other abnormalities are appreciated. Which of the following embryologic errors could account for this presentation?\n\nOptions:\n  A. Abnormal migration of ventral pancreatic bud\n  B. Complete failure of proximal duodenum to recanalize\n  C. Abnormal hypertrophy of the pylorus\n  D. Failure of lateral body folds to move ventrally and fuse in the midline\n\nGenerate a reasoning chain in this EXACT format:\n\nREASONING_CHAIN:\n[STEP 1 | type: symptom/finding | source: patient_data]\n<extract key clinical information from the question>\n[STEP 2 | type: mechanism | source: medical_knowledge]\n<explain the relevant pathophysiology>\n[STEP 3 | type: rule | source: clinical_guideline | depends_on: 1,2]\n<cite the relevant clinical rule or guideline>\n[STEP 4 | type: inference | source: logical_deduction | depends_on: 1,2,3]\n<combine previous steps to narrow down>\n[STEP 5 | type: conclusion | source: logical_deduction | depends_on: 1,2,3,4]\n<state final answer with justification>\n\nANSWER: <correct option letter>",
+    "answer": "Abnormal migration of ventral pancreatic bud",
+    "answer_idx": "A",
+    "options": {
+      "A": "Abnormal migration of ventral pancreatic bud",
+      "B": "Complete failure of proximal duodenum to recanalize",
+      "C": "Abnormal hypertrophy of the pylorus",
+      "D": "Failure of lateral body folds to move ventrally and fuse in the midline"
+    },
+    "question": "A mother brings her 3-week-old infant to the pediatrician's office because she is concerned about his feeding habits. He was born without complications and has not had any medical problems up until this time. However, for the past 4 days, he has been fussy, is regurgitating all of his feeds, and his vomit is yellow in color. On physical exam, the child's abdomen is minimally distended but no other abnormalities are appreciated. Which of the following embryologic errors could account for this presentation?"
+  },
+  {
+    "input": "You are a clinical reasoning system. Given a medical question,\nproduce a structured reasoning chain where EVERY step is independently verifiable.\n\nQuestion: A pulmonary autopsy specimen from a 58-year-old woman who died of acute hypoxic respiratory failure was examined. She had recently undergone surgery for a fractured femur 3 months ago. Initial hospital course was uncomplicated, and she was discharged to a rehab facility in good health. Shortly after discharge home from rehab, she developed sudden shortness of breath and had cardiac arrest. Resuscitation was unsuccessful. On histological examination of lung tissue, fibrous connective tissue around the lumen of the pulmonary artery is observed. Which of the following is the most likely pathogenesis for the present findings?\n\nOptions:\n  A. Thromboembolism\n  B. Pulmonary ischemia\n  C. Pulmonary hypertension\n  D. Pulmonary passive congestion\n\nGenerate a reasoning chain in this EXACT format:\n\nREASONING_CHAIN:\n[STEP 1 | type: symptom/finding | source: patient_data]\n<extract key clinical information from the question>\n[STEP 2 | type: mechanism | source: medical_knowledge]\n<explain the relevant pathophysiology>\n[STEP 3 | type: rule | source: clinical_guideline | depends_on: 1,2]\n<cite the relevant clinical rule or guideline>\n[STEP 4 | type: inference | source: logical_deduction | depends_on: 1,2,3]\n<combine previous steps to narrow down>\n[STEP 5 | type: conclusion | source: logical_deduction | depends_on: 1,2,3,4]\n<state final answer with justification>\n\nANSWER: <correct option letter>",
+    "answer": "Thromboembolism",
+    "answer_idx": "A",
+    "options": {
+      "A": "Thromboembolism",
+      "B": "Pulmonary ischemia",
+      "C": "Pulmonary hypertension",
+      "D": "Pulmonary passive congestion"
+    },
+    "question": "A pulmonary autopsy specimen from a 58-year-old woman who died of acute hypoxic respiratory failure was examined. She had recently undergone surgery for a fractured femur 3 months ago. Initial hospital course was uncomplicated, and she was discharged to a rehab facility in good health. Shortly after discharge home from rehab, she developed sudden shortness of breath and had cardiac arrest. Resuscitation was unsuccessful. On histological examination of lung tissue, fibrous connective tissue around the lumen of the pulmonary artery is observed. Which of the following is the most likely pathogenesis for the present findings?"
+  },
+  {
+    "input": "You are a clinical reasoning system. Given a medical question,\nproduce a structured reasoning chain where EVERY step is independently verifiable.\n\nQuestion: A 20-year-old woman presents with menorrhagia for the past several years. She says that her menses \u201chave always been heavy\u201d, and she has experienced easy bruising for as long as she can remember. Family history is significant for her mother, who had similar problems with bruising easily. The patient's vital signs include: heart rate 98/min, respiratory rate 14/min, temperature 36.1\u00b0C (96.9\u00b0F), and blood pressure 110/87 mm Hg. Physical examination is unremarkable. Laboratory tests show the following: platelet count 200,000/mm3, PT 12 seconds, and PTT 43 seconds. Which of the following is the most likely cause of this patient\u2019s symptoms?\n\nOptions:\n  A. Hemophilia A\n  B. Lupus anticoagulant\n  C. Protein C deficiency\n  D. Von Willebrand disease\n\nGenerate a reasoning chain in this EXACT format:\n\nREASONING_CHAIN:\n[STEP 1 | type: symptom/finding | source: patient_data]\n<extract key clinical information from the question>\n[STEP 2 | type: mechanism | source: medical_knowledge]\n<explain the relevant pathophysiology>\n[STEP 3 | type: rule | source: clinical_guideline | depends_on: 1,2]\n<cite the relevant clinical rule or guideline>\n[STEP 4 | type: inference | source: logical_deduction | depends_on: 1,2,3]\n<combine previous steps to narrow down>\n[STEP 5 | type: conclusion | source: logical_deduction | depends_on: 1,2,3,4]\n<state final answer with justification>\n\nANSWER: <correct option letter>",
+    "answer": "Von Willebrand disease",
+    "answer_idx": "D",
+    "options": {
+      "A": "Hemophilia A",
+      "B": "Lupus anticoagulant",
+      "C": "Protein C deficiency",
+      "D": "Von Willebrand disease"
+    },
+    "question": "A 20-year-old woman presents with menorrhagia for the past several years. She says that her menses \u201chave always been heavy\u201d, and she has experienced easy bruising for as long as she can remember. Family history is significant for her mother, who had similar problems with bruising easily. The patient's vital signs include: heart rate 98/min, respiratory rate 14/min, temperature 36.1\u00b0C (96.9\u00b0F), and blood pressure 110/87 mm Hg. Physical examination is unremarkable. Laboratory tests show the following: platelet count 200,000/mm3, PT 12 seconds, and PTT 43 seconds. Which of the following is the most likely cause of this patient\u2019s symptoms?"
+  }
+]
