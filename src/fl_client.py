@@ -113,7 +113,7 @@ class HospitalClient:
                 selected_indices.extend(chosen.tolist())
 
         # Shuffle and limit
-        rng = np.random.RandomState(hash(self.hospital_id) + round_num + 42)
+        rng = np.random.RandomState(abs(hash(self.hospital_id) + round_num + 42) % (2**32))
         rng.shuffle(selected_indices)
         selected_indices = selected_indices[:num_samples]
 
