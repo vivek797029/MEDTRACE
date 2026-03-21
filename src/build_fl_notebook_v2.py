@@ -13,22 +13,22 @@ md([
     "**Run All cells. If disconnected, just Run All again — resumes automatically.**\n",
 ])
 
-# ─── Cell 2: Install + GPU Check ──────────
+# ─── Cell 2: Install + GPU Check + Mount Drive ──────────
 code([
     "!pip install -q transformers datasets peft accelerate torch\n",
-    "import torch\n",
+    "import torch, os\n",
     "if torch.cuda.is_available():\n",
     "    print(f'GPU: {torch.cuda.get_device_name(0)}')\n",
-    "    print(f'Memory: {torch.cuda.get_device_properties(0).total_mem/1e9:.1f} GB')\n",
+    "    print(f'Memory: {torch.cuda.get_device_properties(0).total_memory/1e9:.1f} GB')\n",
     "else:\n",
-    "    print('WARNING: No GPU detected. Go to Runtime > Change runtime type > T4 GPU')\n",
-])
-
-# ─── Cell 3: Mount Drive ──────────────────
-code([
+    "    print('WARNING: No GPU. Go to Runtime > Change runtime type > T4 GPU')\n",
+    "\n",
     "from google.colab import drive\n",
-    "drive.mount('/content/drive')\n",
-    "print('Drive mounted')\n",
+    "if not os.path.exists('/content/drive/MyDrive'):\n",
+    "    drive.mount('/content/drive')\n",
+    "else:\n",
+    "    print('Drive already mounted')\n",
+    "print('Setup complete')\n",
 ])
 
 # ─── Cell 4: ALL imports + config + classes + training loop ──────
