@@ -108,7 +108,7 @@ class HospitalClient:
             available = classified.get(specialty, classified["general"])
             if len(available) > 0:
                 # Use round_num as seed offset for different data each round
-                rng = np.random.RandomState(hash(self.hospital_id) + round_num)
+                rng = np.random.RandomState(abs(hash(self.hospital_id) + round_num) % (2**32))
                 chosen = rng.choice(available, size=min(n_from_specialty, len(available)), replace=True)
                 selected_indices.extend(chosen.tolist())
 

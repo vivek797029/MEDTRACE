@@ -45,13 +45,23 @@
       "special": true
     }
   ],
-  "normalizer": null,
-  "pre_tokenizer": {
-    "type": "Metaspace",
-    "replacement": "▁",
-    "prepend_scheme": "first",
-    "split": false
+  "normalizer": {
+    "type": "Sequence",
+    "normalizers": [
+      {
+        "type": "Prepend",
+        "prepend": "▁"
+      },
+      {
+        "type": "Replace",
+        "pattern": {
+          "String": " "
+        },
+        "content": "▁"
+      }
+    ]
   },
+  "pre_tokenizer": null,
   "post_processor": {
     "type": "TemplateProcessing",
     "single": [
@@ -133,7 +143,7 @@
   "model": {
     "type": "BPE",
     "dropout": null,
-    "unk_token": null,
+    "unk_token": "<unk>",
     "continuing_subword_prefix": null,
     "end_of_word_suffix": null,
     "fuse_unk": true,

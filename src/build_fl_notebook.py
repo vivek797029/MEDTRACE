@@ -1,68 +1,43 @@
-{
- "nbformat": 4,
- "nbformat_minor": 0,
- "metadata": {
-  "colab": {
-   "provenance": [],
-   "gpuType": "T4"
-  },
-  "kernelspec": {
-   "name": "python3",
-   "display_name": "Python 3"
-  },
-  "language_info": {
-   "name": "python"
-  },
-  "accelerator": "GPU"
- },
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
+"""Build the FL Colab notebook programmatically."""
+import json
+
+cells = []
+
+def md(lines):
+    cells.append({"cell_type": "markdown", "metadata": {}, "source": lines})
+
+def code(lines):
+    cells.append({"cell_type": "code", "metadata": {}, "source": lines, "execution_count": None, "outputs": []})
+
+# ─── Cell 1: Title ─────────────────────────
+md([
     "# MedTrace Federated Learning Simulation\n",
     "## Privacy-Preserving Medical AI Training\n",
     "\n",
     "**Architecture:** 3 hospitals train locally, share only LoRA weight deltas with differential privacy.\n",
-    "No patient data ever leaves the hospital.\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "No patient data ever leaves the hospital.\n",
+])
+
+# ─── Cell 2: GPU Check ────────────────────
+code([
     "import torch\n",
     "if torch.cuda.is_available():\n",
     "    print(f'GPU: {torch.cuda.get_device_name(0)}')\n",
     "else:\n",
-    "    print('No GPU, using CPU')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
-    "!pip install -q transformers datasets peft accelerate torch\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "    print('No GPU, using CPU')\n",
+])
+
+# ─── Cell 3: Install ──────────────────────
+code(["!pip install -q transformers datasets peft accelerate torch\n"])
+
+# ─── Cell 4: Mount Drive ──────────────────
+code([
     "from google.colab import drive\n",
-    "drive.mount('/content/drive')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "drive.mount('/content/drive')\n",
+])
+
+# ─── Cell 5: Config + Imports ──────────────
+code([
     "import os, json, time, copy\n",
     "import torch\n",
     "import numpy as np\n",
@@ -98,15 +73,11 @@
     "}\n",
     "\n",
     "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n",
-    "print(f'Device: {device} | Hospitals: {NUM_HOSPITALS} | Rounds: {FL_ROUNDS}')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print(f'Device: {device} | Hospitals: {NUM_HOSPITALS} | Rounds: {FL_ROUNDS}')\n",
+])
+
+# ─── Cell 6: Load Data ────────────────────
+code([
     "print('Loading MedQA USMLE dataset...')\n",
     "dataset = load_dataset('GBaker/MedQA-USMLE-4-options', split='train')\n",
     "print(f'Total: {len(dataset)} examples')\n",
@@ -114,15 +85,11 @@
     "tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)\n",
     "if tokenizer.pad_token is None:\n",
     "    tokenizer.pad_token = tokenizer.eos_token\n",
-    "print('Tokenizer loaded')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print('Tokenizer loaded')\n",
+])
+
+# ─── Cell 7: Hospital Client ──────────────
+code([
     "class HospitalClient:\n",
     "    def __init__(self, hospital_id, config):\n",
     "        self.hospital_id = hospital_id\n",
@@ -208,15 +175,11 @@
     "        if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
     "        return lora_w, {'hospital': self.name, 'loss': loss, 'samples': len(self.local_data), 'time': elapsed}\n",
     "\n",
-    "print('HospitalClient defined')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print('HospitalClient defined')\n",
+])
+
+# ─── Cell 8: Server ───────────────────────
+code([
     "class FederatedServer:\n",
     "    def __init__(self):\n",
     "        self.global_weights = None\n",
@@ -256,15 +219,11 @@
     "        print(f'  Weight divergence: {div:.6f}')\n",
     "        return self.global_weights\n",
     "\n",
-    "print('FederatedServer defined')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print('FederatedServer defined')\n",
+])
+
+# ─── Cell 9: Run Simulation with Checkpointing ───────────────
+code([
     "import torch, os\n",
     "from collections import OrderedDict\n",
     "from peft import LoraConfig, get_peft_model\n",
@@ -295,7 +254,7 @@
     "    return None, -1\n",
     "\n",
     "print('=' * 70)\n",
-    "print('  MedTrace Federated Learning \u2014 Starting')\n",
+    "print('  MedTrace Federated Learning — Starting')\n",
     "print('=' * 70)\n",
     "\n",
     "server = FederatedServer()\n",
@@ -304,7 +263,7 @@
     "global_w, start_round = load_latest_checkpoint()\n",
     "start_round = start_round + 1  # next round to run\n",
     "if global_w is None:\n",
-    "    print('No checkpoint found \u2014 starting fresh')\n",
+    "    print('No checkpoint found — starting fresh')\n",
     "    global_w = server.init_global_model()\n",
     "    start_round = 0\n",
     "else:\n",
@@ -333,15 +292,11 @@
     "total_time = time.time() - total_t0\n",
     "print(f'\\n{\"=\"*70}')\n",
     "print(f'  Training complete! Total: {total_time:.1f}s')\n",
-    "print(f'{\"=\"*70}')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print(f'{\"=\"*70}')\n",
+])
+
+# ─── Cell 10: Save ────────────────────────
+code([
     "save_dir = '/content/drive/MyDrive/MedTrace/federated-global'\n",
     "os.makedirs(save_dir, exist_ok=True)\n",
     "\n",
@@ -359,15 +314,11 @@
     "    json.dump(metadata, f, indent=2)\n",
     "print(f'Federated model saved to: {save_dir}')\n",
     "del model, base\n",
-    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
+])
+
+# ─── Cell 11: Evaluate ────────────────────
+code([
     "print('Loading federated model...')\n",
     "base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)\n",
     "model = PeftModel.from_pretrained(base, save_dir)\n",
@@ -389,15 +340,11 @@
     "    ans = tokenizer.decode(out[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)\n",
     "    print(f'\\nQ: {q}')\n",
     "    print(f'A: {ans[:400]}')\n",
-    "    print('-' * 60)\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "    print('-' * 60)\n",
+])
+
+# ─── Cell 12: Interactive ─────────────────
+code([
     "print('Type your medical question below (quit to stop)\\n')\n",
     "while True:\n",
     "    question = input('Your question: ')\n",
@@ -408,10 +355,23 @@
     "        out = model.generate(**inputs, max_new_tokens=400, temperature=0.7,\n",
     "                            do_sample=True, pad_token_id=tokenizer.eos_token_id)\n",
     "    ans = tokenizer.decode(out[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)\n",
-    "    print(f'\\n{\"=\"*60}\\n{ans}\\n{\"=\"*60}\\n')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  }
- ]
+    "    print(f'\\n{\"=\"*60}\\n{ans}\\n{\"=\"*60}\\n')\n",
+])
+
+# Build notebook
+notebook = {
+    "nbformat": 4,
+    "nbformat_minor": 0,
+    "metadata": {
+        "colab": {"provenance": [], "gpuType": "T4"},
+        "kernelspec": {"name": "python3", "display_name": "Python 3"},
+        "language_info": {"name": "python"},
+        "accelerator": "GPU"
+    },
+    "cells": cells
 }
+
+out_path = "/sessions/magical-serene-newton/mnt/Downloads/medtrace/MedTrace_FL_Colab.ipynb"
+with open(out_path, "w") as f:
+    json.dump(notebook, f, indent=1)
+print(f"Notebook saved: {out_path}")
