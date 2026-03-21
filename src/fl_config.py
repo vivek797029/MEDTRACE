@@ -10,9 +10,9 @@ BASE_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 # ─── Federated Learning ──────────────────────────────────────
 NUM_HOSPITALS = 3                  # Simulated hospital nodes
-FL_ROUNDS = 5                     # Number of federated aggregation rounds
-LOCAL_EPOCHS = 1                   # Training epochs per hospital per round
-EXAMPLES_PER_HOSPITAL = 500        # Data samples per hospital node
+FL_ROUNDS = 10                     # 10 rounds × ~60 min/round ≈ 10 hours on T4
+LOCAL_EPOCHS = 2                   # 2 epochs per hospital per round (deeper learning)
+EXAMPLES_PER_HOSPITAL = 1500       # 1500 samples per hospital (4500 total per round)
 AGGREGATION_STRATEGY = "fedavg"    # FedAvg (weighted by dataset size)
 
 # ─── LoRA Configuration ──────────────────────────────────────
@@ -48,7 +48,7 @@ HOSPITAL_CONFIGS = {
             "respiratory": 0.2,
             "general": 0.3
         },
-        "num_samples": 500
+        "num_samples": 1500
     },
     "hospital_B": {
         "name": "Royal London (Neurology Focus)",
@@ -58,7 +58,7 @@ HOSPITAL_CONFIGS = {
             "endocrine": 0.2,
             "general": 0.3
         },
-        "num_samples": 400
+        "num_samples": 1200
     },
     "hospital_C": {
         "name": "AIIMS Delhi (Infectious Disease Focus)",
@@ -68,7 +68,7 @@ HOSPITAL_CONFIGS = {
             "gastrointestinal": 0.2,
             "general": 0.3
         },
-        "num_samples": 450
+        "num_samples": 1300
     }
 }
 
