@@ -144,7 +144,7 @@ code([
     "        args = TrainingArguments(\n",
     "            output_dir=out_dir, num_train_epochs=LOCAL_EPOCHS,\n",
     "            per_device_train_batch_size=BATCH_SIZE, learning_rate=LR,\n",
-    "            warmup_steps=10, logging_steps=20, save_strategy='no',\n",
+    "            warmup_steps=10, logging_steps=5, save_strategy='no',\n",
     "            report_to='none', fp16=torch.cuda.is_available(),\n",
     "            gradient_checkpointing=True, gradient_accumulation_steps=2,\n",
     "            dataloader_pin_memory=False)\n",

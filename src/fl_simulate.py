@@ -115,9 +115,46 @@ def run_simulation(args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # ─── Checkpoint helpers ───────────────────────────────────
+    # Works on both Kaggle (/kaggle/working) and Colab (/content)
+    if os.path.exists("/kaggle/working"):
+        CKPT_DIR = "/kaggle/working/fl_checkpoints"
+    else:
+        CKPT_DIR = "/content/fl_checkpoints"
+    os.makedirs(CKPT_DIR, exist_ok=True)
+
+    def save_ckpt(weights, round_num):
+        path = os.path.join(CKPT_DIR, f"round_{round_num}.pt")
+        torch.save(weights, path)
+        with open(os.path.join(CKPT_DIR, "last_round.txt"), "w") as f:
+            f.write(str(round_num))
+        print(f"  💾 Checkpoint saved → {path}")
+
+    def load_ckpt():
+        marker = os.path.join(CKPT_DIR, "last_round.txt")
+        if not os.path.exists(marker):
+            return None, -1
+        with open(marker) as f:
+            last = int(f.read().strip())
+        path = os.path.join(CKPT_DIR, f"round_{last}.pt")
+        if os.path.exists(path):
+            w = torch.load(path, map_location="cpu")
+            print(f"  ✅ Resumed from checkpoint: round_{last}.pt")
+            return w, last
+        return None, -1
+
     # Initialize server
     server = FederatedServer(device=device)
-    global_weights = server.initialize_global_model()
+
+    # Try to resume from checkpoint
+    global_weights, last_completed = load_ckpt()
+    start_round = last_completed + 1
+    if global_weights is None:
+        print("  No checkpoint found — starting fresh")
+        global_weights = server.initialize_global_model()
+        start_round = 0
+    else:
+        print(f"  Resuming from round {start_round + 1}/{cfg.FL_ROUNDS}")
 
     # Initialize hospital clients
     print("\n🏥 Initializing Hospital Nodes...")
@@ -134,7 +171,7 @@ def run_simulation(args):
     total_start = time.time()
     all_round_metrics = []
 
-    for round_num in range(cfg.FL_ROUNDS):
+    for round_num in range(start_round, cfg.FL_ROUNDS):
         round_start = time.time()
         print(f"\n{'='*70}")
         print(f"  🔄 FEDERATED ROUND {round_num + 1}/{cfg.FL_ROUNDS}")
@@ -157,7 +194,8 @@ def run_simulation(args):
         # Step 3: Server aggregates (FedAvg)
         global_weights = server.aggregate(client_updates, round_num)
 
-        # Step 4: Save checkpoint
+        # Step 4: Save checkpoint after EVERY round
+        save_ckpt(global_weights, round_num)
         if (round_num + 1) % 2 == 0 or round_num == cfg.FL_ROUNDS - 1:
             server.save_global_model(tokenizer, round_num)
 
