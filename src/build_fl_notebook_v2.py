@@ -1,63 +1,41 @@
-{
- "nbformat": 4,
- "nbformat_minor": 0,
- "metadata": {
-  "colab": {
-   "provenance": [],
-   "gpuType": "T4"
-  },
-  "kernelspec": {
-   "name": "python3",
-   "display_name": "Python 3"
-  },
-  "language_info": {
-   "name": "python"
-  },
-  "accelerator": "GPU"
- },
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
+"""Build a bulletproof FL Colab notebook — all-in-one with checkpointing."""
+import json
+
+cells = []
+def md(lines): cells.append({"cell_type": "markdown", "metadata": {}, "source": lines})
+def code(lines): cells.append({"cell_type": "code", "metadata": {}, "source": lines, "execution_count": None, "outputs": []})
+
+# ─── Cell 1: Title ─────────────────────────
+md([
     "# MedTrace Federated Learning\n",
-    "## Privacy-Preserving Medical AI \u2014 10-Hour Training with Checkpointing\n",
+    "## Privacy-Preserving Medical AI — 10-Hour Training with Checkpointing\n",
     "\n",
-    "**Run All cells. If disconnected, just Run All again \u2014 resumes automatically.**\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "**Run All cells. If disconnected, just Run All again — resumes automatically.**\n",
+])
+
+# ─── Cell 2: Install + GPU Check ──────────
+code([
     "!pip install -q transformers datasets peft accelerate torch\n",
     "import torch\n",
     "if torch.cuda.is_available():\n",
     "    print(f'GPU: {torch.cuda.get_device_name(0)}')\n",
     "    print(f'Memory: {torch.cuda.get_device_properties(0).total_mem/1e9:.1f} GB')\n",
     "else:\n",
-    "    print('WARNING: No GPU detected. Go to Runtime > Change runtime type > T4 GPU')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "    print('WARNING: No GPU detected. Go to Runtime > Change runtime type > T4 GPU')\n",
+])
+
+# ─── Cell 3: Mount Drive ──────────────────
+code([
     "from google.colab import drive\n",
     "drive.mount('/content/drive')\n",
-    "print('Drive mounted')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "print('Drive mounted')\n",
+])
+
+# ─── Cell 4: ALL imports + config + classes + training loop ──────
+# One giant cell so nothing can go out of scope
+code([
     "# ================================================================\n",
-    "# MEDTRACE FEDERATED LEARNING \u2014 COMPLETE TRAINING SCRIPT\n",
+    "# MEDTRACE FEDERATED LEARNING — COMPLETE TRAINING SCRIPT\n",
     "# All code in one cell to prevent scope issues on reconnect\n",
     "# ================================================================\n",
     "\n",
@@ -72,7 +50,7 @@
     ")\n",
     "from peft import LoraConfig, get_peft_model, PeftModel\n",
     "\n",
-    "# \u2500\u2500\u2500 CONFIG \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── CONFIG ───────────────────────────────────────────────\n",
     "BASE_MODEL = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'\n",
     "NUM_HOSPITALS = 3\n",
     "FL_ROUNDS = 10\n",
@@ -101,7 +79,7 @@
     "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n",
     "print(f'Device: {device} | Rounds: {FL_ROUNDS} | Epochs: {LOCAL_EPOCHS}')\n",
     "\n",
-    "# \u2500\u2500\u2500 CHECKPOINT FUNCTIONS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── CHECKPOINT FUNCTIONS ─────────────────────────────────\n",
     "def save_checkpoint(weights, round_num):\n",
     "    path = os.path.join(CHECKPOINT_DIR, f'round_{round_num}.pt')\n",
     "    torch.save(weights, path)\n",
@@ -122,7 +100,7 @@
     "        return w, last\n",
     "    return None, -1\n",
     "\n",
-    "# \u2500\u2500\u2500 HOSPITAL CLIENT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── HOSPITAL CLIENT ─────────────────────────────────────\n",
     "class HospitalClient:\n",
     "    def __init__(self, hid, config):\n",
     "        self.hid = hid\n",
@@ -210,7 +188,7 @@
     "        if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
     "        return lora_w, {'hospital': self.name, 'loss': loss, 'samples': len(self.local_data), 'time': elapsed}\n",
     "\n",
-    "# \u2500\u2500\u2500 FEDERATED SERVER \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── FEDERATED SERVER ─────────────────────────────────────\n",
     "class FederatedServer:\n",
     "    def __init__(self):\n",
     "        self.global_weights = None\n",
@@ -249,7 +227,7 @@
     "        print(f'  Weight divergence: {div:.6f}')\n",
     "        return self.global_weights\n",
     "\n",
-    "# \u2500\u2500\u2500 LOAD DATA \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── LOAD DATA ────────────────────────────────────────────\n",
     "print('Loading MedQA USMLE dataset...')\n",
     "dataset = load_dataset('GBaker/MedQA-USMLE-4-options', split='train')\n",
     "print(f'Total: {len(dataset)} examples')\n",
@@ -258,7 +236,7 @@
     "if tokenizer.pad_token is None:\n",
     "    tokenizer.pad_token = tokenizer.eos_token\n",
     "\n",
-    "# \u2500\u2500\u2500 INIT SERVER + RESUME \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── INIT SERVER + RESUME ─────────────────────────────────\n",
     "print('\\n' + '='*70)\n",
     "print('  MedTrace Federated Learning')\n",
     "print('='*70)\n",
@@ -268,7 +246,7 @@
     "start_round = last_round + 1\n",
     "\n",
     "if global_w is None:\n",
-    "    print('No checkpoint found \u2014 starting fresh')\n",
+    "    print('No checkpoint found — starting fresh')\n",
     "    global_w = server.init_global_model()\n",
     "    start_round = 0\n",
     "else:\n",
@@ -301,7 +279,7 @@
     "    print(f'  TRAINING COMPLETE! Total: {total_time:.1f}s')\n",
     "    print(f'{\"=\"*70}')\n",
     "\n",
-    "# \u2500\u2500\u2500 SAVE FINAL MODEL TO DRIVE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ─── SAVE FINAL MODEL TO DRIVE ───────────────────────────\n",
     "print('\\nSaving final federated model to Drive...')\n",
     "base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)\n",
     "lora_cfg = LoraConfig(r=LORA_R, lora_alpha=LORA_ALPHA, lora_dropout=0.05,\n",
@@ -317,15 +295,11 @@
     "    json.dump(metadata, f, indent=2)\n",
     "print(f'Model saved to: {SAVE_DIR}')\n",
     "del model, base\n",
-    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
+])
+
+# ─── Cell 5: Evaluate ────────────────────
+code([
     "# ================================================================\n",
     "# EVALUATE FEDERATED MODEL\n",
     "# ================================================================\n",
@@ -352,17 +326,13 @@
     "    print(f'A: {ans[:500]}')\n",
     "    print('-' * 60)\n",
     "del model, base\n",
-    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "source": [
+    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
+])
+
+# ─── Cell 6: Interactive ─────────────────
+code([
     "# ================================================================\n",
-    "# INTERACTIVE MODE \u2014 Ask the federated model anything\n",
+    "# INTERACTIVE MODE — Ask the federated model anything\n",
     "# ================================================================\n",
     "print('Loading model...')\n",
     "base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)\n",
@@ -380,10 +350,22 @@
     "        out = model.generate(**inputs, max_new_tokens=400, temperature=0.7,\n",
     "                            do_sample=True, pad_token_id=tokenizer.eos_token_id)\n",
     "    ans = tokenizer.decode(out[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)\n",
-    "    print(f'\\n{\"=\"*60}\\n{ans}\\n{\"=\"*60}\\n')\n"
-   ],
-   "execution_count": null,
-   "outputs": []
-  }
- ]
+    "    print(f'\\n{\"=\"*60}\\n{ans}\\n{\"=\"*60}\\n')\n",
+])
+
+# Build notebook
+notebook = {
+    "nbformat": 4, "nbformat_minor": 0,
+    "metadata": {
+        "colab": {"provenance": [], "gpuType": "T4"},
+        "kernelspec": {"name": "python3", "display_name": "Python 3"},
+        "language_info": {"name": "python"},
+        "accelerator": "GPU"
+    },
+    "cells": cells
 }
+
+out = "/sessions/magical-serene-newton/mnt/Downloads/medtrace/MedTrace_FL_Colab.ipynb"
+with open(out, "w") as f:
+    json.dump(notebook, f, indent=1)
+print(f"Notebook saved: {out}")
