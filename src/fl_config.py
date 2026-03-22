@@ -10,8 +10,8 @@ BASE_MODEL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 # ─── Federated Learning ──────────────────────────────────────
 NUM_HOSPITALS = 3                  # Simulated hospital nodes
-FL_ROUNDS = 10                     # 10 rounds × ~60 min/round ≈ 10 hours on T4
-LOCAL_EPOCHS = 2                   # 2 epochs per hospital per round (deeper learning)
+FL_ROUNDS = 20                     # 20 rounds × ~30 min/round ≈ 10 hours on T4
+LOCAL_EPOCHS = 1                   # 1 epoch per round, more frequent aggregation = better FL
 EXAMPLES_PER_HOSPITAL = 1500       # 1500 samples per hospital (4500 total per round)
 AGGREGATION_STRATEGY = "fedavg"    # FedAvg (weighted by dataset size)
 
