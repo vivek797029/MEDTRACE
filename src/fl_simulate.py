@@ -1,67 +1,127 @@
 """
 MedTrace Federated Learning — Full Simulation
 ==============================================
-Simulates federated training across 3 hospital nodes with:
-  - Non-IID data distribution (each hospital has specialty bias)
-  - Differential privacy (Gaussian noise on weight deltas)
-  - Secure aggregation (simulated encryption)
+Orchestrates federated training across hospital nodes with:
+  - Non-IID data distribution per hospital specialty
+  - Differential privacy (Gaussian mechanism)
+  - Secure aggregation (simulated)
   - FedAvg aggregation with weighted contributions
-  - Per-round evaluation and metrics logging
+  - Per-round checkpointing + auto-resume
 
 Usage:
-  python fl_simulate.py                    # Full simulation
-  python fl_simulate.py --rounds 3         # Custom rounds
+  python fl_simulate.py                    # Full simulation (20 rounds)
+  python fl_simulate.py --rounds 3         # Custom round count
   python fl_simulate.py --quick            # Quick demo (2 rounds, 100 samples)
-
-Architecture Overview:
-  ┌──────────────────────────────────────────────────────────────┐
-  │                                                              │
-  │   Round 1    Round 2    Round 3    Round 4    Round 5        │
-  │     ↓          ↓          ↓          ↓          ↓           │
-  │  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐         │
-  │  │ A,B,C│  │ A,B,C│  │ A,B,C│  │ A,B,C│  │ A,B,C│         │
-  │  │train │  │train │  │train │  │train │  │train │         │
-  │  └──┬───┘  └──┬───┘  └──┬───┘  └──┬───┘  └──┬───┘         │
-  │     ↓          ↓          ↓          ↓          ↓           │
-  │  FedAvg     FedAvg     FedAvg     FedAvg     FedAvg         │
-  │     ↓          ↓          ↓          ↓          ↓           │
-  │  Global     Global     Global     Global     Global         │
-  │  Model v1   Model v2   Model v3   Model v4   Model v5      │
-  │                                                 ↓           │
-  │                                          Final Model        │
-  │                                          + Report           │
-  └──────────────────────────────────────────────────────────────┘
 """
 
+from __future__ import annotations
+
+import argparse
+import json
+import logging
 import os
 import sys
-import json
 import time
-import argparse
-import torch
-import numpy as np
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from typing import Optional
 
-# Add src to path
+import torch
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Add src to path for standalone execution
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import fl_config as cfg
 from fl_client import HospitalClient
+from fl_config import FLConfig
 from fl_server import FederatedServer
 
+logger = logging.getLogger(__name__)
+
+
+# ─── Logging Setup ────────────────────────────────────────────
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """Configure structured logging for the FL simulation."""
+    fmt = "%(asctime)s | %(levelname)-5s | %(name)s | %(message)s"
+    logging.basicConfig(level=level, format=fmt, datefmt="%H:%M:%S")
+    # Silence noisy third-party loggers
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("datasets").setLevel(logging.WARNING)
+    logging.getLogger("accelerate").setLevel(logging.WARNING)
+
+
+# ─── Checkpoint Helpers ───────────────────────────────────────
+
+class CheckpointManager:
+    """Manages round-level checkpoint save/load with verification."""
+
+    def __init__(self, checkpoint_dir: str):
+        self.dir = checkpoint_dir
+        os.makedirs(self.dir, exist_ok=True)
+
+    def save(self, weights, round_num: int) -> None:
+        path = os.path.join(self.dir, f"round_{round_num}.pt")
+        marker = os.path.join(self.dir, "last_round.txt")
+
+        torch.save(weights, path)
+
+        # Verify
+        if not os.path.exists(path):
+            raise RuntimeError(f"Checkpoint save failed: {path}")
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        if size_mb < 0.1:
+            raise RuntimeError(f"Checkpoint too small ({size_mb:.2f}MB): {path}")
+
+        with open(marker, "w") as f:
+            f.write(str(round_num))
+
+        logger.info("Checkpoint saved & verified: round_%d.pt (%.1fMB)", round_num, size_mb)
+
+    def load(self):
+        marker = os.path.join(self.dir, "last_round.txt")
+        if not os.path.exists(marker):
+            return None, -1
+
+        with open(marker) as f:
+            last = int(f.read().strip())
+
+        path = os.path.join(self.dir, f"round_{last}.pt")
+        if not os.path.exists(path):
+            logger.warning("Marker says round %d but file missing", last)
+            return None, -1
+
+        weights = torch.load(path, map_location="cpu", weights_only=False)
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        logger.info("Resumed from round_%d.pt (%.1fMB)", last, size_mb)
+        return weights, last
+
+
+# ─── Device Detection ─────────────────────────────────────────
+
+def detect_device() -> str:
+    if torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        logger.info("GPU detected: %s", name)
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        logger.info("Apple Silicon MPS detected")
+        return "mps"
+    logger.info("Using CPU")
+    return "cpu"
+
+
+# ─── Data Loading ─────────────────────────────────────────────
 
 def load_medical_data():
     """Load MedQA USMLE dataset."""
-    print("📚 Loading MedQA USMLE dataset...")
+    logger.info("Loading MedQA USMLE dataset...")
     ds = load_dataset("GBaker/MedQA-USMLE-4-options", split="train")
-    print(f"   Total examples: {len(ds)}")
+    logger.info("Dataset loaded: %d examples", len(ds))
     return ds
 
 
 def build_reasoning_format(dataset):
     """Add reasoning trace format to questions."""
-
     def format_example(example):
         q = example["question"]
         options = example.get("options", {})
@@ -69,169 +129,130 @@ def build_reasoning_format(dataset):
             opts_str = "\n".join([f"  {k}. {v}" for k, v in options.items()])
         else:
             opts_str = str(options)
-
         example["question"] = f"Question: {q}\n\nOptions:\n{opts_str}"
         return example
 
     return dataset.map(format_example)
 
 
-def run_simulation(args):
+# ─── Main Simulation ──────────────────────────────────────────
+
+def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
     """Execute the full federated learning simulation."""
 
-    print("=" * 70)
-    print("  🧬 MedTrace Federated Learning Simulation")
-    print("  Privacy-Preserving Medical AI Training")
-    print("=" * 70)
+    logger.info("=" * 60)
+    logger.info("MedTrace Federated Learning Simulation")
+    logger.info("Rounds: %d | Hospitals: %d | DP: %s (eps=%.1f)",
+                cfg.fl_rounds, cfg.num_hospitals,
+                "ON" if cfg.dp.enabled else "OFF", cfg.dp.epsilon)
+    logger.info("=" * 60)
 
-    # Override config for quick mode
-    if args.quick:
-        cfg.FL_ROUNDS = 2
-        cfg.EXAMPLES_PER_HOSPITAL = 100
-        for h in cfg.HOSPITAL_CONFIGS.values():
-            h["num_samples"] = 100
-        print("\n⚡ Quick mode: 2 rounds, 100 samples per hospital\n")
+    device = detect_device()
 
-    if args.rounds:
-        cfg.FL_ROUNDS = args.rounds
-
-    # Detect device
-    if torch.cuda.is_available():
-        device = "cuda"
-        print(f"🔥 Using GPU: {torch.cuda.get_device_name(0)}")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
-        print("🍎 Using Apple Silicon MPS")
-    else:
-        device = "cpu"
-        print("💻 Using CPU")
-
-    # Load data
+    # Data
     dataset = load_medical_data()
     dataset = build_reasoning_format(dataset)
 
-    # Initialize tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(cfg.BASE_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.base_model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # ─── Checkpoint helpers ───────────────────────────────────
-    # Works on both Kaggle (/kaggle/working) and Colab (/content)
-    if os.path.exists("/kaggle/working"):
-        CKPT_DIR = "/kaggle/working/fl_checkpoints"
-    else:
-        CKPT_DIR = "/content/fl_checkpoints"
-    os.makedirs(CKPT_DIR, exist_ok=True)
+    # Checkpointing
+    if checkpoint_dir is None:
+        if os.path.exists("/kaggle/working"):
+            checkpoint_dir = "/kaggle/working/fl_checkpoints"
+        elif os.path.exists("/content/drive/MyDrive"):
+            checkpoint_dir = "/content/drive/MyDrive/MedTrace/fl_checkpoints"
+        elif os.path.exists("/content"):
+            checkpoint_dir = "/content/fl_checkpoints"
+        else:
+            checkpoint_dir = os.path.join(cfg.output_dir, "checkpoints")
 
-    def save_ckpt(weights, round_num):
-        path = os.path.join(CKPT_DIR, f"round_{round_num}.pt")
-        torch.save(weights, path)
-        with open(os.path.join(CKPT_DIR, "last_round.txt"), "w") as f:
-            f.write(str(round_num))
-        print(f"  💾 Checkpoint saved → {path}")
+    ckpt = CheckpointManager(checkpoint_dir)
 
-    def load_ckpt():
-        marker = os.path.join(CKPT_DIR, "last_round.txt")
-        if not os.path.exists(marker):
-            return None, -1
-        with open(marker) as f:
-            last = int(f.read().strip())
-        path = os.path.join(CKPT_DIR, f"round_{last}.pt")
-        if os.path.exists(path):
-            w = torch.load(path, map_location="cpu")
-            print(f"  ✅ Resumed from checkpoint: round_{last}.pt")
-            return w, last
-        return None, -1
-
-    # Initialize server
-    server = FederatedServer(device=device)
-
-    # Try to resume from checkpoint
-    global_weights, last_completed = load_ckpt()
+    # Server + resume
+    server = FederatedServer(device=device, cfg=cfg)
+    global_weights, last_completed = ckpt.load()
     start_round = last_completed + 1
+
     if global_weights is None:
-        print("  No checkpoint found — starting fresh")
+        logger.info("No checkpoint — starting fresh")
         global_weights = server.initialize_global_model()
         start_round = 0
     else:
-        print(f"  Resuming from round {start_round + 1}/{cfg.FL_ROUNDS}")
+        server.global_weights = global_weights
+        logger.info("Resuming from round %d/%d", start_round + 1, cfg.fl_rounds)
 
-    # Initialize hospital clients
-    print("\n🏥 Initializing Hospital Nodes...")
-    hospitals = {}
-    for hospital_id, hospital_config in cfg.HOSPITAL_CONFIGS.items():
-        hospitals[hospital_id] = HospitalClient(hospital_id, hospital_config, device=device)
+    # Initialize hospitals
+    hospitals = {
+        hid: HospitalClient(hid, hcfg, device=device, cfg=cfg)
+        for hid, hcfg in cfg.hospitals.items()
+    }
 
-    # Prepare output directory
-    os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
-    os.makedirs(cfg.HOSPITAL_MODELS_DIR, exist_ok=True)
-    os.makedirs(cfg.METRICS_DIR, exist_ok=True)
+    # Output dirs
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    os.makedirs(cfg.hospital_models_dir, exist_ok=True)
+    os.makedirs(cfg.metrics_dir, exist_ok=True)
 
-    # ─── Federated Training Loop ─────────────────────────────
+    # ─── Training Loop ────────────────────────────────────────
     total_start = time.time()
     all_round_metrics = []
 
-    for round_num in range(start_round, cfg.FL_ROUNDS):
+    for round_num in range(start_round, cfg.fl_rounds):
         round_start = time.time()
-        print(f"\n{'='*70}")
-        print(f"  🔄 FEDERATED ROUND {round_num + 1}/{cfg.FL_ROUNDS}")
-        print(f"{'='*70}")
+        logger.info("=" * 60)
+        logger.info("ROUND %d/%d", round_num + 1, cfg.fl_rounds)
 
-        # Step 1: Each hospital prepares its local data (non-IID)
-        print("\n📊 Distributing data to hospitals (non-IID)...")
-        for hospital_id, client in hospitals.items():
+        # Step 1: Distribute data (non-IID)
+        for client in hospitals.values():
             client.prepare_local_data(dataset, round_num)
 
-        # Step 2: Each hospital trains locally
-        # OPTIMIZATION: Load base model ONCE per round, share across all hospitals.
-        # Previously this loaded the 1.1GB model 3x per round = 60 loads total.
-        # Now it loads once per round = 20 loads total. Saves ~25 min over full training.
-        print("\n🔧 Loading base model once for this round (shared across hospitals)...")
-        shared_base_model = AutoModelForCausalLM.from_pretrained(
-            cfg.BASE_MODEL,
-            torch_dtype=torch.float32,
+        # Step 2: Local training (shared base model loaded ONCE per round)
+        logger.info("Loading base model once for round (shared across hospitals)...")
+        shared_base = AutoModelForCausalLM.from_pretrained(
+            cfg.base_model, torch_dtype=torch.float32,
         )
-        shared_base_model.eval()  # Base stays in eval; each hospital deepcopies it
+        shared_base.eval()
 
-        print("🔧 Local training phase...")
         client_updates = {}
-        for hospital_id, client in hospitals.items():
-            weights, metrics = client.train_local(
-                global_weights, tokenizer, round_num, cfg.HOSPITAL_MODELS_DIR,
-                base_model=shared_base_model  # ← pass shared model
+        for hid, client in hospitals.items():
+            w, m = client.train_local(
+                global_weights, tokenizer, round_num,
+                cfg.hospital_models_dir, base_model=shared_base,
             )
-            client_updates[hospital_id] = (weights, metrics)
+            client_updates[hid] = (w, m)
 
-        # Release shared base model after all hospitals are done this round
-        del shared_base_model
+        del shared_base
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # Step 3: Server aggregates (FedAvg)
+        # Step 3: Aggregate
         global_weights = server.aggregate(client_updates, round_num)
 
-        # Step 4: Save checkpoint after EVERY round
-        save_ckpt(global_weights, round_num)
-        if (round_num + 1) % 2 == 0 or round_num == cfg.FL_ROUNDS - 1:
+        # Step 4: Checkpoint
+        ckpt.save(global_weights, round_num)
+
+        # Periodic model save
+        if (round_num + 1) % 5 == 0 or round_num == cfg.fl_rounds - 1:
             server.save_global_model(tokenizer, round_num)
 
-        round_elapsed = time.time() - round_start
-        print(f"\n  ⏱️  Round {round_num + 1} complete: {round_elapsed:.1f}s")
+        elapsed = time.time() - round_start
+        rounds_done = round_num - start_round + 1
+        avg = elapsed  # this round
+        remaining = (cfg.fl_rounds - round_num - 1) * avg / 60
+        logger.info("Round %d complete: %.1fs | ETA: %.0f min", round_num + 1, elapsed, remaining)
 
-        # Collect metrics
-        round_data = {
+        all_round_metrics.append({
             "round": round_num + 1,
-            "time_seconds": round(round_elapsed, 2),
+            "time_seconds": round(elapsed, 2),
             "hospital_metrics": {hid: m for hid, (_, m) in client_updates.items()},
-        }
-        all_round_metrics.append(round_data)
+        })
 
     total_elapsed = time.time() - total_start
 
     # ─── Final Evaluation ─────────────────────────────────────
-    print(f"\n{'='*70}")
-    print("  📝 FINAL EVALUATION")
-    print(f"{'='*70}")
+    logger.info("=" * 60)
+    logger.info("FINAL EVALUATION")
 
     eval_questions = [
         "A 55-year-old woman presents with sudden onset of left-sided weakness and slurred speech. CT shows no hemorrhage. What is the next step?",
@@ -239,54 +260,49 @@ def run_simulation(args):
         "A 65-year-old diabetic patient presents with crushing chest pain. Troponin is elevated. What is the most appropriate management?",
     ]
 
-    server.save_global_model(tokenizer, cfg.FL_ROUNDS - 1, cfg.GLOBAL_MODEL_DIR)
+    server.save_global_model(tokenizer, cfg.fl_rounds - 1, cfg.global_model_dir)
     eval_results = server.evaluate_global(tokenizer, eval_questions)
 
-    # ─── Generate Report ──────────────────────────────────────
+    # ─── Report ───────────────────────────────────────────────
     report = server.generate_report()
     report["total_training_time"] = round(total_elapsed, 2)
     report["eval_results"] = eval_results
     report["all_round_metrics"] = all_round_metrics
 
-    # Save report
-    report_path = os.path.join(cfg.METRICS_DIR, "fl_training_report.json")
+    report_path = os.path.join(cfg.metrics_dir, "fl_training_report.json")
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2, default=str)
 
-    # ─── Summary ──────────────────────────────────────────────
-    print(f"\n{'='*70}")
-    print("  🎉 FEDERATED TRAINING COMPLETE")
-    print(f"{'='*70}")
-    print(f"""
-  📊 Summary:
-     Hospitals:            {cfg.NUM_HOSPITALS}
-     Rounds:               {cfg.FL_ROUNDS}
-     Total time:           {total_elapsed:.1f}s
-     Differential Privacy: {'ON (ε={})'.format(cfg.DP_EPSILON) if cfg.DIFFERENTIAL_PRIVACY else 'OFF'}
-     Secure Aggregation:   {'ON' if cfg.SECURE_AGGREGATION else 'OFF'}
-     Global model:         {cfg.GLOBAL_MODEL_DIR}
-     Report:               {report_path}
-
-  🔒 Privacy Guarantee:
-     No patient data was transmitted between hospitals.
-     Only LoRA adapter deltas ({sum(p.numel() for p in global_weights.values()):,} params)
-     were shared, with differential privacy noise applied.
-
-  🏥 Hospital Contributions:""")
-
-    for name, info in report.get("hospital_contributions", {}).items():
-        print(f"     {name}: weight={info['weight']:.3f}, samples={info['samples']}")
-
-    print(f"\n  💡 Next: Upload to HuggingFace or deploy on HF Spaces")
-    print(f"{'='*70}\n")
+    logger.info("=" * 60)
+    logger.info("TRAINING COMPLETE | Total: %.1fs | Report: %s", total_elapsed, report_path)
+    logger.info("Model: %s", cfg.global_model_dir)
 
     return report
 
 
-if __name__ == "__main__":
+# ─── CLI Entry Point ──────────────────────────────────────────
+
+def main():
     parser = argparse.ArgumentParser(description="MedTrace Federated Learning Simulation")
     parser.add_argument("--rounds", type=int, default=None, help="Number of FL rounds")
-    parser.add_argument("--quick", action="store_true", help="Quick demo mode")
+    parser.add_argument("--quick", action="store_true", help="Quick demo mode (2 rounds, 100 samples)")
+    parser.add_argument("--checkpoint-dir", type=str, default=None, help="Checkpoint directory")
+    parser.add_argument("--verbose", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
 
-    run_simulation(args)
+    setup_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    # Build config (immutable — no mutation of globals)
+    if args.quick:
+        cfg = FLConfig.quick_demo()
+        logger.info("Quick mode: 2 rounds, 100 samples per hospital")
+    elif args.rounds:
+        cfg = FLConfig.create(fl_rounds=args.rounds)
+    else:
+        cfg = FLConfig()
+
+    run_simulation(cfg, checkpoint_dir=args.checkpoint_dir)
+
+
+if __name__ == "__main__":
+    main()

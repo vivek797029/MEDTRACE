@@ -3,198 +3,176 @@ MedTrace Federated Learning — Hospital Client
 ==============================================
 Each hospital trains a local LoRA adapter on its private data,
 then shares ONLY the adapter weight deltas with the central server.
-
-Architecture:
-  ┌──────────────────────────────┐
-  │       Hospital Node          │
-  │  ┌────────────────────────┐  │
-  │  │   Private Patient Data │  │  ← NEVER leaves this boundary
-  │  └──────────┬─────────────┘  │
-  │             ↓                │
-  │  ┌────────────────────────┐  │
-  │  │  TinyLlama + LoRA      │  │  ← Local fine-tuning
-  │  └──────────┬─────────────┘  │
-  │             ↓                │
-  │  ┌────────────────────────┐  │
-  │  │  DP Noise Injection    │  │  ← Differential privacy
-  │  └──────────┬─────────────┘  │
-  │             ↓                │
-  │  ┌────────────────────────┐  │
-  │  │  LoRA Δ Weights (2MB)  │──┼──→ Sent to server (encrypted)
-  │  └────────────────────────┘  │
-  └──────────────────────────────┘
 """
 
-import os
-import copy
-import json
-import time
-import torch
-import numpy as np
-from collections import OrderedDict
-from datasets import Dataset
-from transformers import (
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForLanguageModeling
-)
-from peft import LoraConfig, get_peft_model, PeftModel
+from __future__ import annotations
 
-import fl_config as cfg
+import copy
+import logging
+import os
+import time
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+from datasets import Dataset
+from peft import LoraConfig, get_peft_model
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    DataCollatorForLanguageModeling,
+    Trainer,
+    TrainingArguments,
+)
+
+from fl_config import FLConfig, HospitalConfig, config as default_config
+
+logger = logging.getLogger(__name__)
+
+# Type aliases
+WeightDict = OrderedDict  # OrderedDict[str, torch.Tensor]
+Metrics = Dict[str, Any]
 
 
 class HospitalClient:
     """Represents a single hospital node in the federated network."""
 
-    def __init__(self, hospital_id, hospital_config, device="cpu"):
+    def __init__(
+        self,
+        hospital_id: str,
+        hospital_config: HospitalConfig,
+        device: str = "cpu",
+        cfg: FLConfig = default_config,
+    ):
         self.hospital_id = hospital_id
         self.config = hospital_config
-        self.name = hospital_config["name"]
-        self.location = hospital_config["location"]
+        self.name = hospital_config.name
         self.device = device
-        self.round_metrics = []
+        self.cfg = cfg
+        self.round_metrics: List[Metrics] = []
 
         # Privacy accounting
-        self.privacy_budget_spent = 0.0
-        self.total_privacy_budget = cfg.DP_EPSILON
+        self.privacy_budget_spent: float = 0.0
 
-        print(f"  🏥 Initialized {self.name} ({self.location})")
+        logger.info("Initialized %s (%s)", self.name, hospital_config.location)
 
-    def prepare_local_data(self, full_dataset, round_num=0):
+    # ─── Data Preparation ─────────────────────────────────────
+
+    def prepare_local_data(self, full_dataset: Dataset, round_num: int = 0) -> Dataset:
         """
         Simulate non-IID data distribution.
         Each hospital gets a biased subset reflecting its specialty.
         """
-        specialty_weights = self.config["specialty_weight"]
-        num_samples = self.config["num_samples"]
+        keywords = self.config.specialty_keywords
+        num_samples = self.config.num_samples
+        specialty_ratio = self.config.specialty_ratio
 
-        # Keyword mapping for specialty detection
-        specialty_keywords = {
-            "cardiovascular": ["heart", "cardiac", "coronary", "chest pain", "hypertension",
-                             "arrhythmia", "myocardial", "angina", "aortic", "valve"],
-            "neurological": ["brain", "neuro", "seizure", "headache", "stroke",
-                           "cognitive", "dementia", "nerve", "spinal", "motor"],
-            "respiratory": ["lung", "breath", "pulmonary", "asthma", "pneumonia",
-                          "cough", "airway", "bronch", "oxygen", "ventil"],
-            "infectious": ["infection", "fever", "bacteria", "virus", "antibiotic",
-                         "sepsis", "hiv", "tuberculosis", "malaria", "pathogen"],
-            "endocrine": ["diabetes", "thyroid", "hormone", "insulin", "adrenal",
-                        "pituitary", "metabol", "glucose", "cortisol", "endocrine"],
-            "gastrointestinal": ["stomach", "liver", "bowel", "intestin", "gastric",
-                               "hepat", "pancrea", "digest", "colon", "abdomin"],
-        }
-
-        # Classify each example by specialty
-        classified = {spec: [] for spec in specialty_keywords}
-        classified["general"] = []
-
+        # Classify examples: specialty vs general
+        spec_idx: List[int] = []
+        gen_idx: List[int] = []
         for i, example in enumerate(full_dataset):
             question = example.get("question", "").lower()
-            matched = False
-            for spec, keywords in specialty_keywords.items():
-                if any(kw in question for kw in keywords):
-                    classified[spec].append(i)
-                    matched = True
-                    break
-            if not matched:
-                classified["general"].append(i)
+            if any(kw in question for kw in keywords):
+                spec_idx.append(i)
+            else:
+                gen_idx.append(i)
 
-        # Sample according to hospital's specialty distribution
-        selected_indices = []
-        for specialty, weight in specialty_weights.items():
-            n_from_specialty = int(num_samples * weight)
-            available = classified.get(specialty, classified["general"])
-            if len(available) > 0:
-                # Use round_num as seed offset for different data each round
-                rng = np.random.RandomState(abs(hash(self.hospital_id) + round_num) % (2**32))
-                chosen = rng.choice(available, size=min(n_from_specialty, len(available)), replace=True)
-                selected_indices.extend(chosen.tolist())
+        # Sample according to specialty ratio
+        seed = abs(hash(self.hospital_id) + round_num) % (2**32)
+        rng = np.random.RandomState(seed)
 
-        # Shuffle and limit
-        rng = np.random.RandomState(abs(hash(self.hospital_id) + round_num + 42) % (2**32))
-        rng.shuffle(selected_indices)
-        selected_indices = selected_indices[:num_samples]
+        n_spec = min(int(num_samples * specialty_ratio), len(spec_idx))
+        n_gen = num_samples - n_spec
 
-        self.local_data = full_dataset.select(selected_indices)
-        print(f"  📊 {self.name}: {len(self.local_data)} samples (non-IID)")
+        chosen: List[int] = []
+        if n_spec > 0 and len(spec_idx) > 0:
+            chosen.extend(rng.choice(spec_idx, n_spec, replace=True).tolist())
+        if n_gen > 0 and len(gen_idx) > 0:
+            chosen.extend(rng.choice(gen_idx, min(n_gen, len(gen_idx)), replace=True).tolist())
+
+        # Shuffle
+        seed2 = abs(hash(self.hospital_id) + round_num + 42) % (2**32)
+        rng2 = np.random.RandomState(seed2)
+        rng2.shuffle(chosen)
+
+        self.local_data = full_dataset.select(chosen[:num_samples])
+        logger.info("%s: %d samples (%d specialty)", self.name, len(self.local_data), n_spec)
         return self.local_data
 
-    def train_local(self, global_weights, tokenizer, round_num, output_dir, base_model=None):
+    # ─── Local Training ───────────────────────────────────────
+
+    def train_local(
+        self,
+        global_weights: Optional[WeightDict],
+        tokenizer: AutoTokenizer,
+        round_num: int,
+        output_dir: str,
+        base_model: Optional[AutoModelForCausalLM] = None,
+    ) -> Tuple[WeightDict, Metrics]:
         """
         Train LoRA adapter on local hospital data.
-        Returns ONLY the weight deltas (not full weights).
+        Returns ONLY the weight deltas (not full model).
 
         Args:
-            global_weights: aggregated LoRA weights from previous round
-            tokenizer: shared tokenizer
-            round_num: current FL round index
-            output_dir: directory for temp training artifacts
-            base_model: (optional) pre-loaded base model to reuse across hospitals.
-                        If None, loads from HuggingFace (slower — avoid in loops).
+            global_weights: aggregated LoRA weights from previous round.
+            tokenizer: shared tokenizer instance.
+            round_num: current FL round index (0-based).
+            output_dir: directory for temp training artifacts.
+            base_model: optional pre-loaded base model. If provided, it will be
+                        deep-copied (caller retains ownership). If None, loads fresh.
         """
-        print(f"\n  🔧 {self.name} — Round {round_num + 1} local training...")
-        start_time = time.time()
+        logger.info("%s — Round %d local training...", self.name, round_num + 1)
+        t0 = time.time()
 
-        # Use pre-loaded base model if provided, otherwise load fresh
-        # NOTE: Loading from HuggingFace each time wastes ~25s per hospital.
-        # Pass base_model from the caller to share across hospitals in the same round.
-        _owns_base_model = base_model is None
-        if _owns_base_model:
-            print(f"  ⚠️  Loading base model from scratch (slow). Pass base_model= to reuse.")
+        # Load or reuse base model
+        _owns_base = base_model is None
+        if _owns_base:
+            logger.warning("Loading base model from scratch (slow). Pass base_model= to reuse.")
             base_model = AutoModelForCausalLM.from_pretrained(
-                cfg.BASE_MODEL,
-                torch_dtype=torch.float32,
+                self.cfg.base_model, torch_dtype=torch.float32,
             )
 
-        # Apply LoRA on top of the base model
-        # We use copy.deepcopy so each hospital gets independent LoRA weights
-        # without affecting the shared base model
-        base_model_copy = copy.deepcopy(base_model)
-        lora_config = LoraConfig(
-            r=cfg.LORA_R,
-            lora_alpha=cfg.LORA_ALPHA,
-            lora_dropout=cfg.LORA_DROPOUT,
-            target_modules=cfg.LORA_TARGET_MODULES,
-            bias="none",
-            task_type="CAUSAL_LM"
-        )
-        model = get_peft_model(base_model_copy, lora_config)
+        # Deep copy so each hospital gets independent weights
+        base_copy = copy.deepcopy(base_model)
+        lora_cfg = self._make_lora_config()
+        model = get_peft_model(base_copy, lora_cfg)
 
-        # Load global weights from previous round (if any)
         if global_weights is not None:
             model.load_state_dict(global_weights, strict=False)
 
         model.to(self.device)
         model.train()
 
-        # Tokenize local data
+        # Tokenize
+        system_msg = self.cfg.system_msg
+        max_length = self.cfg.training.max_length
+
         def tokenize_fn(examples):
-            prompts = []
-            for q in examples["question"]:
-                prompt = f"<|system|>\n{cfg.SYSTEM_MSG}</s>\n<|user|>\n{q}</s>\n<|assistant|>\n"
-                prompts.append(prompt)
-            encoded = tokenizer(prompts, truncation=True, max_length=cfg.MAX_LENGTH, padding="max_length")
-            encoded["labels"] = encoded["input_ids"].copy()
-            return encoded
+            prompts = [
+                f"<|system|>\n{system_msg}</s>\n<|user|>\n{q}</s>\n<|assistant|>\n"
+                for q in examples["question"]
+            ]
+            enc = tokenizer(prompts, truncation=True, max_length=max_length, padding="max_length")
+            enc["labels"] = enc["input_ids"].copy()
+            return enc
 
-        tokenized = self.local_data.map(tokenize_fn, batched=True, remove_columns=self.local_data.column_names)
-        tokenized.set_format("torch")
+        tok_data = self.local_data.map(tokenize_fn, batched=True, remove_columns=self.local_data.column_names)
+        tok_data.set_format("torch")
 
-        # Training arguments
-        hospital_output = os.path.join(output_dir, self.hospital_id, f"round_{round_num}")
-        os.makedirs(hospital_output, exist_ok=True)
+        # Training
+        hospital_out = os.path.join(output_dir, self.hospital_id, f"round_{round_num}")
+        os.makedirs(hospital_out, exist_ok=True)
 
-        training_args = TrainingArguments(
-            output_dir=hospital_output,
-            num_train_epochs=cfg.LOCAL_EPOCHS,
-            per_device_train_batch_size=cfg.BATCH_SIZE,
-            gradient_accumulation_steps=cfg.GRADIENT_ACCUMULATION_STEPS,
-            learning_rate=cfg.LEARNING_RATE,
-            warmup_steps=cfg.WARMUP_STEPS,
-            weight_decay=cfg.WEIGHT_DECAY,
-            logging_steps=10,
+        args = TrainingArguments(
+            output_dir=hospital_out,
+            num_train_epochs=self.cfg.local_epochs,
+            per_device_train_batch_size=self.cfg.training.batch_size,
+            gradient_accumulation_steps=self.cfg.training.gradient_accumulation_steps,
+            learning_rate=self.cfg.training.learning_rate,
+            warmup_steps=self.cfg.training.warmup_steps,
+            weight_decay=self.cfg.training.weight_decay,
+            logging_steps=self.cfg.training.logging_steps,
             save_strategy="no",
             report_to="none",
             fp16=torch.cuda.is_available(),
@@ -203,80 +181,99 @@ class HospitalClient:
         )
 
         trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=tokenized,
+            model=model, args=args, train_dataset=tok_data,
             data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
         )
-
         trainer.train()
-        elapsed = time.time() - start_time
+        elapsed = time.time() - t0
 
-        # Extract ONLY LoRA weights (the deltas)
-        lora_state_dict = self._extract_lora_weights(model)
+        # Extract LoRA weights
+        lora_weights = self._extract_lora_weights(model)
 
-        # Apply differential privacy noise
-        if cfg.DIFFERENTIAL_PRIVACY:
-            lora_state_dict = self._apply_dp_noise(lora_state_dict, round_num)
+        # Apply DP noise
+        if self.cfg.dp.enabled:
+            lora_weights = self._apply_dp_noise(lora_weights)
 
-        # Compute metrics
-        train_loss = trainer.state.log_history[-1].get("train_loss", 0) if trainer.state.log_history else 0
-        metrics = {
+        # Metrics
+        train_loss = (
+            trainer.state.log_history[-1].get("train_loss", 0.0)
+            if trainer.state.log_history else 0.0
+        )
+        metrics: Metrics = {
             "hospital": self.name,
             "round": round_num,
             "train_loss": train_loss,
             "num_samples": len(self.local_data),
             "training_time_seconds": round(elapsed, 2),
-            "lora_params_shared": sum(p.numel() for p in lora_state_dict.values()),
+            "lora_params_shared": sum(p.numel() for p in lora_weights.values()),
             "privacy_budget_spent": self.privacy_budget_spent,
         }
         self.round_metrics.append(metrics)
-        print(f"  ✅ {self.name} — Loss: {train_loss:.4f} | Time: {elapsed:.1f}s | "
-              f"Shared: {metrics['lora_params_shared']:,} params")
+        logger.info(
+            "%s — Loss: %.4f | Time: %.1fs | Params: %s",
+            self.name, train_loss, elapsed,
+            f"{metrics['lora_params_shared']:,}",
+        )
 
-        # Cleanup — only delete base_model if WE loaded it (not if caller passed it in)
-        del model, base_model_copy, trainer
-        if _owns_base_model:
+        # Cleanup
+        del model, base_copy, trainer
+        if _owns_base:
             del base_model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        return lora_state_dict, metrics
+        return lora_weights, metrics
 
-    def _extract_lora_weights(self, model):
+    # ─── Private Helpers ──────────────────────────────────────
+
+    def _make_lora_config(self) -> LoraConfig:
+        """Build a peft LoraConfig from our config."""
+        return LoraConfig(
+            r=self.cfg.lora.r,
+            lora_alpha=self.cfg.lora.alpha,
+            lora_dropout=self.cfg.lora.dropout,
+            target_modules=list(self.cfg.lora.target_modules),
+            bias=self.cfg.lora.bias,
+            task_type=self.cfg.lora.task_type,
+        )
+
+    @staticmethod
+    def _extract_lora_weights(model) -> WeightDict:
         """Extract only LoRA adapter parameters — this is what gets shared."""
-        lora_weights = OrderedDict()
+        weights = OrderedDict()
         for name, param in model.named_parameters():
             if "lora_" in name:
-                lora_weights[name] = param.detach().cpu().clone()
-        return lora_weights
+                weights[name] = param.detach().cpu().clone()
+        return weights
 
-    def _apply_dp_noise(self, weights, round_num):
+    def _apply_dp_noise(self, weights: WeightDict) -> WeightDict:
         """
-        Add calibrated Gaussian noise for differential privacy.
-        Implements the Gaussian mechanism with (ε, δ)-DP guarantee.
+        Gaussian mechanism with (epsilon, delta)-DP guarantee.
+        Uses advanced composition: per-round epsilon = epsilon / sqrt(T).
         """
-        sensitivity = cfg.DP_MAX_GRAD_NORM
-        sigma = sensitivity * np.sqrt(2 * np.log(1.25 / cfg.DP_DELTA)) / cfg.DP_EPSILON
+        sigma = self.cfg.dp.sigma
+        max_norm = self.cfg.dp.max_grad_norm
 
-        noisy_weights = OrderedDict()
+        noisy = OrderedDict()
         for name, param in weights.items():
-            # Clip gradients
+            # Clip
             norm = torch.norm(param)
-            if norm > cfg.DP_MAX_GRAD_NORM:
-                param = param * (cfg.DP_MAX_GRAD_NORM / norm)
+            if norm > max_norm:
+                param = param * (max_norm / norm)
+            # Add noise
+            noisy[name] = param + torch.randn_like(param) * sigma
 
-            # Add Gaussian noise
-            noise = torch.randn_like(param) * sigma
-            noisy_weights[name] = param + noise
+        # Advanced composition theorem: total eps = eps_per_round * sqrt(T)
+        # So per-round spend = total_eps / sqrt(T)
+        per_round_eps = self.cfg.dp.epsilon / (self.cfg.fl_rounds ** 0.5)
+        self.privacy_budget_spent += per_round_eps
 
-        # Track privacy budget (simplified composition)
-        self.privacy_budget_spent += cfg.DP_EPSILON / cfg.FL_ROUNDS
-        print(f"  🔒 DP noise applied (σ={sigma:.4f}) | "
-              f"Privacy budget: {self.privacy_budget_spent:.2f}/{self.total_privacy_budget}")
+        logger.info(
+            "DP noise applied (sigma=%.4f) | Budget: %.3f / %.1f",
+            sigma, self.privacy_budget_spent, self.cfg.dp.epsilon,
+        )
+        return noisy
 
-        return noisy_weights
-
-    def get_metrics(self):
+    def get_metrics(self) -> List[Metrics]:
         """Return all training metrics for this hospital."""
         return self.round_metrics
