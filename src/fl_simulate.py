@@ -41,7 +41,7 @@ import argparse
 import torch
 import numpy as np
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -183,13 +183,29 @@ def run_simulation(args):
             client.prepare_local_data(dataset, round_num)
 
         # Step 2: Each hospital trains locally
-        print("\n🔧 Local training phase...")
+        # OPTIMIZATION: Load base model ONCE per round, share across all hospitals.
+        # Previously this loaded the 1.1GB model 3x per round = 60 loads total.
+        # Now it loads once per round = 20 loads total. Saves ~25 min over full training.
+        print("\n🔧 Loading base model once for this round (shared across hospitals)...")
+        shared_base_model = AutoModelForCausalLM.from_pretrained(
+            cfg.BASE_MODEL,
+            torch_dtype=torch.float32,
+        )
+        shared_base_model.eval()  # Base stays in eval; each hospital deepcopies it
+
+        print("🔧 Local training phase...")
         client_updates = {}
         for hospital_id, client in hospitals.items():
             weights, metrics = client.train_local(
-                global_weights, tokenizer, round_num, cfg.HOSPITAL_MODELS_DIR
+                global_weights, tokenizer, round_num, cfg.HOSPITAL_MODELS_DIR,
+                base_model=shared_base_model  # ← pass shared model
             )
             client_updates[hospital_id] = (weights, metrics)
+
+        # Release shared base model after all hospitals are done this round
+        del shared_base_model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Step 3: Server aggregates (FedAvg)
         global_weights = server.aggregate(client_updates, round_num)

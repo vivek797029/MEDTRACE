@@ -121,21 +121,37 @@ class HospitalClient:
         print(f"  📊 {self.name}: {len(self.local_data)} samples (non-IID)")
         return self.local_data
 
-    def train_local(self, global_weights, tokenizer, round_num, output_dir):
+    def train_local(self, global_weights, tokenizer, round_num, output_dir, base_model=None):
         """
         Train LoRA adapter on local hospital data.
         Returns ONLY the weight deltas (not full weights).
+
+        Args:
+            global_weights: aggregated LoRA weights from previous round
+            tokenizer: shared tokenizer
+            round_num: current FL round index
+            output_dir: directory for temp training artifacts
+            base_model: (optional) pre-loaded base model to reuse across hospitals.
+                        If None, loads from HuggingFace (slower — avoid in loops).
         """
         print(f"\n  🔧 {self.name} — Round {round_num + 1} local training...")
         start_time = time.time()
 
-        # Load fresh base model
-        base_model = AutoModelForCausalLM.from_pretrained(
-            cfg.BASE_MODEL,
-            torch_dtype=torch.float32,
-        )
+        # Use pre-loaded base model if provided, otherwise load fresh
+        # NOTE: Loading from HuggingFace each time wastes ~25s per hospital.
+        # Pass base_model from the caller to share across hospitals in the same round.
+        _owns_base_model = base_model is None
+        if _owns_base_model:
+            print(f"  ⚠️  Loading base model from scratch (slow). Pass base_model= to reuse.")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                cfg.BASE_MODEL,
+                torch_dtype=torch.float32,
+            )
 
-        # Apply LoRA
+        # Apply LoRA on top of the base model
+        # We use copy.deepcopy so each hospital gets independent LoRA weights
+        # without affecting the shared base model
+        base_model_copy = copy.deepcopy(base_model)
         lora_config = LoraConfig(
             r=cfg.LORA_R,
             lora_alpha=cfg.LORA_ALPHA,
@@ -144,7 +160,7 @@ class HospitalClient:
             bias="none",
             task_type="CAUSAL_LM"
         )
-        model = get_peft_model(base_model, lora_config)
+        model = get_peft_model(base_model_copy, lora_config)
 
         # Load global weights from previous round (if any)
         if global_weights is not None:
@@ -218,8 +234,10 @@ class HospitalClient:
         print(f"  ✅ {self.name} — Loss: {train_loss:.4f} | Time: {elapsed:.1f}s | "
               f"Shared: {metrics['lora_params_shared']:,} params")
 
-        # Cleanup
-        del model, base_model, trainer
+        # Cleanup — only delete base_model if WE loaded it (not if caller passed it in)
+        del model, base_model_copy, trainer
+        if _owns_base_model:
+            del base_model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
