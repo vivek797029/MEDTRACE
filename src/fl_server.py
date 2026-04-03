@@ -18,13 +18,9 @@ import torch
 from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from fl_config import FLConfig, config as default_config
+from fl_config import FLConfig, Metrics, WeightDict, config as default_config
 
 logger = logging.getLogger(__name__)
-
-# Type aliases
-WeightDict = OrderedDict  # OrderedDict[str, torch.Tensor]
-Metrics = Dict[str, Any]
 
 
 class FederatedServer:
@@ -196,16 +192,27 @@ class FederatedServer:
         return round_dir
 
     def evaluate_global(self, tokenizer: AutoTokenizer,
-                        eval_questions: List[str]) -> List[Dict[str, str]]:
-        """Quick evaluation of the global model on test questions."""
-        logger.info("Evaluating global model on %d questions...", len(eval_questions))
+                        eval_questions: List[str],
+                        max_eval: int = 3) -> List[Dict[str, str]]:
+        """
+        Quick evaluation of the global model on test questions.
+
+        Args:
+            tokenizer: shared tokenizer instance.
+            eval_questions: list of questions to evaluate.
+            max_eval: maximum number of questions to run (default 3) to keep
+                      evaluation fast during training. Pass len(eval_questions)
+                      to evaluate all questions.
+        """
+        n = min(max_eval, len(eval_questions))
+        logger.info("Evaluating global model on %d/%d questions...", n, len(eval_questions))
 
         model = self._load_peft_model(self.global_weights)
         model.to(self.device)
         model.eval()
 
         results = []
-        for q in eval_questions[:3]:
+        for q in eval_questions[:n]:
             prompt = f"<|system|>\n{self.cfg.system_msg}</s>\n<|user|>\n{q}</s>\n<|assistant|>\n"
             inputs = tokenizer(prompt, return_tensors="pt").to(self.device)
 
@@ -228,12 +235,18 @@ class FederatedServer:
     # ─── Reporting ────────────────────────────────────────────
 
     def get_metrics(self) -> List[Metrics]:
-        return self.round_metrics
+        """Return a copy of round metrics to prevent external mutation."""
+        return list(self.round_metrics)
 
     def generate_report(self) -> Dict[str, Any]:
-        """Generate a full training report."""
+        """
+        Generate a full training report.
+
+        Returns copies of internal metric collections so that callers cannot
+        accidentally mutate server state by appending to the returned lists/dicts.
+        """
         return {
             "config": self.cfg.to_dict(),
-            "round_metrics": self.round_metrics,
-            "hospital_contributions": self.hospital_contributions,
+            "round_metrics": list(self.round_metrics),
+            "hospital_contributions": dict(self.hospital_contributions),
         }

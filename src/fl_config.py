@@ -8,8 +8,17 @@ Override values via FLConfig.create() — never mutate after creation.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+# ─── Shared Type Aliases ─────────────────────────────────────────────────────
+# Defined here so client, server, and simulation modules all import from a
+# single source of truth instead of duplicating these aliases.
+# torch is intentionally NOT imported here — fl_config has no runtime torch
+# dependency and must remain importable without the ML stack installed.
+WeightDict = OrderedDict  # OrderedDict[str, torch.Tensor]  (torch for type doc only)
+Metrics = Dict[str, Any]
 
 
 @dataclass(frozen=True)

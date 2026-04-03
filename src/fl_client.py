@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -26,13 +26,9 @@ from transformers import (
     TrainingArguments,
 )
 
-from fl_config import FLConfig, HospitalConfig, config as default_config
+from fl_config import FLConfig, HospitalConfig, Metrics, WeightDict, config as default_config
 
 logger = logging.getLogger(__name__)
-
-# Type aliases
-WeightDict = OrderedDict  # OrderedDict[str, torch.Tensor]
-Metrics = Dict[str, Any]
 
 
 class HospitalClient:
@@ -54,6 +50,10 @@ class HospitalClient:
 
         # Privacy accounting
         self.privacy_budget_spent: float = 0.0
+
+        # Populated by prepare_local_data(); None until that method is called.
+        # train_local() will raise a clear error if called before data preparation.
+        self.local_data: Optional[Dataset] = None
 
         logger.info("Initialized %s (%s)", self.name, hospital_config.location)
 
@@ -122,6 +122,11 @@ class HospitalClient:
             base_model: optional pre-loaded base model. If provided, it will be
                         deep-copied (caller retains ownership). If None, loads fresh.
         """
+        if self.local_data is None:
+            raise RuntimeError(
+                f"{self.name}: call prepare_local_data() before train_local()"
+            )
+
         logger.info("%s — Round %d local training...", self.name, round_num + 1)
         t0 = time.time()
 
@@ -275,5 +280,5 @@ class HospitalClient:
         return noisy
 
     def get_metrics(self) -> List[Metrics]:
-        """Return all training metrics for this hospital."""
-        return self.round_metrics
+        """Return a copy of all training metrics for this hospital."""
+        return list(self.round_metrics)

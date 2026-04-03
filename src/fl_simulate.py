@@ -121,7 +121,13 @@ def load_medical_data():
 
 
 def build_reasoning_format(dataset):
-    """Add reasoning trace format to questions."""
+    """
+    Append answer options to each question for multi-choice reasoning format.
+
+    Note: HuggingFace Arrow-backed datasets are immutable — in-place key assignment
+    on `example` is silently ignored. The map function must return a dict with the
+    updated keys so the library can write a new column.
+    """
     def format_example(example):
         q = example["question"]
         options = example.get("options", {})
@@ -129,8 +135,9 @@ def build_reasoning_format(dataset):
             opts_str = "\n".join([f"  {k}. {v}" for k, v in options.items()])
         else:
             opts_str = str(options)
-        example["question"] = f"Question: {q}\n\nOptions:\n{opts_str}"
-        return example
+        # Must return a dict with updated keys — HuggingFace Arrow datasets are
+        # immutable; any direct key assignment on `example` is silently ignored.
+        return {"question": f"Question: {q}\n\nOptions:\n{opts_str}"}
 
     return dataset.map(format_example)
 
@@ -238,7 +245,9 @@ def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
 
         elapsed = time.time() - round_start
         rounds_done = round_num - start_round + 1
-        avg = elapsed  # this round
+        # Use rolling average over all completed rounds for a stable ETA estimate.
+        # Using only the current round's time produces wild swings early in training.
+        avg = (time.time() - total_start) / rounds_done
         remaining = (cfg.fl_rounds - round_num - 1) * avg / 60
         logger.info("Round %d complete: %.1fs | ETA: %.0f min", round_num + 1, elapsed, remaining)
 
