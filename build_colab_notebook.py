@@ -1,61 +1,56 @@
-{
- "nbformat": 4,
- "nbformat_minor": 0,
- "metadata": {
-  "colab": {
-   "provenance": [],
-   "gpuType": "T4",
-   "toc_visible": true
-  },
-  "kernelspec": {
-   "display_name": "Python 3",
-   "name": "python3"
-  },
-  "language_info": {
-   "name": "python"
-  },
-  "accelerator": "GPU"
- },
- "cells": [
-  {
-   "cell_type": "markdown",
-   "metadata": {},
-   "source": [
-    "# \ud83c\udfe5 MedTrace FL \u2014 Privacy-Preserving Federated Medical AI\n",
+"""
+Generate MedTrace_FL_Colab.ipynb  — production Colab notebook.
+
+Run:
+    python3 build_colab_notebook.py
+"""
+import json, os
+
+cells = []
+
+def md(*lines):
+    cells.append({"cell_type": "markdown", "metadata": {}, "source": list(lines)})
+
+def code(*lines):
+    cells.append({
+        "cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+        "source": list(lines),
+    })
+
+
+# ── Cell 1: Title ────────────────────────────────────────────────────────────
+md(
+    "# 🏥 MedTrace FL — Privacy-Preserving Federated Medical AI\n",
     "\n",
     "Fine-tunes **TinyLlama 1.1B** across 3 hospital nodes using **Federated Averaging + LoRA + Differential Privacy**.\n",
-    "No patient data is ever shared \u2014 only noise-protected model weight deltas.\n",
+    "No patient data is ever shared — only noise-protected model weight deltas.\n",
     "\n",
     "---\n",
     "\n",
-    "## \u26a1 GPU Unit Budget\n",
+    "## ⚡ GPU Unit Budget\n",
     "| GPU | Cost/hr | Full 20 rounds | Recommended? |\n",
     "|-----|---------|---------------|--------------|\n",
-    "| T4  | ~1.8 units | ~10\u201313 units | \u2705 Best value |\n",
-    "| L4  | ~2.8 units | ~7\u201310 units  | \u2705 Faster |\n",
-    "| A100 | ~9.6 units | ~18\u201322 units | \u26a0\ufe0f Expensive |\n",
-    "| V100 | ~3.8 units | ~12\u201316 units | \u2705 Good |\n",
+    "| T4  | ~1.8 units | ~10–13 units | ✅ Best value |\n",
+    "| L4  | ~2.8 units | ~7–10 units  | ✅ Faster |\n",
+    "| A100 | ~9.6 units | ~18–22 units | ⚠️ Expensive |\n",
+    "| V100 | ~3.8 units | ~12–16 units | ✅ Good |\n",
     "\n",
     "**With 65 units: you can comfortably run the full 20-round experiment on any GPU.**\n",
     "\n",
-    "## \ud83d\udd04 Auto-Resume\n",
-    "All checkpoints are saved to Google Drive. If the session disconnects, just **Run All** again \u2014 training picks up from the last completed round.\n",
+    "## 🔄 Auto-Resume\n",
+    "All checkpoints are saved to Google Drive. If the session disconnects, just **Run All** again — training picks up from the last completed round.\n",
     "\n",
-    "## \ud83d\udccb Steps\n",
-    "1. **Cell 1** \u2014 Install deps + mount Drive + GPU check\n",
-    "2. **Cell 2** \u2014 Configure experiment (rounds, DP, hospitals)\n",
-    "3. **Cell 3** \u2014 Run full federated training\n",
-    "4. **Cell 4** \u2014 Evaluate and plot results\n",
-    "5. **Cell 5** \u2014 Interactive question-answering\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Install dependencies \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "## 📋 Steps\n",
+    "1. **Cell 1** — Install deps + mount Drive + GPU check\n",
+    "2. **Cell 2** — Configure experiment (rounds, DP, hospitals)\n",
+    "3. **Cell 3** — Run full federated training\n",
+    "4. **Cell 4** — Evaluate and plot results\n",
+    "5. **Cell 5** — Interactive question-answering\n",
+)
+
+# ── Cell 2: Install + setup ──────────────────────────────────────────────────
+code(
+    "# ── Install dependencies ─────────────────────────────────────────────────\n",
     "import subprocess, sys\n",
     "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',\n",
     "    'transformers>=4.38', 'datasets', 'peft>=0.9', 'accelerate', 'torch',\n",
@@ -66,59 +61,55 @@
     "if torch.cuda.is_available():\n",
     "    name = torch.cuda.get_device_name(0)\n",
     "    mem  = torch.cuda.get_device_properties(0).total_memory / 1e9\n",
-    "    print(f'\u2705  GPU: {name}')\n",
+    "    print(f'✅  GPU: {name}')\n",
     "    print(f'   VRAM: {mem:.1f} GB')\n",
     "else:\n",
-    "    print('\u26a0\ufe0f  No GPU detected!')\n",
-    "    print('   Go to Runtime \u2192 Change runtime type \u2192 T4 GPU')\n",
+    "    print('⚠️  No GPU detected!')\n",
+    "    print('   Go to Runtime → Change runtime type → T4 GPU')\n",
     "    raise SystemExit('Please enable GPU before continuing.')\n",
     "\n",
     "from google.colab import drive\n",
     "if not os.path.exists('/content/drive/MyDrive'):\n",
     "    drive.mount('/content/drive')\n",
-    "    print('\u2705  Drive mounted')\n",
+    "    print('✅  Drive mounted')\n",
     "else:\n",
-    "    print('\u2705  Drive already mounted')\n",
-    "print('=' * 60)\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Experiment Configuration \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "    print('✅  Drive already mounted')\n",
+    "print('=' * 60)\n",
+)
+
+# ── Cell 3: Configuration ────────────────────────────────────────────────────
+code(
+    "# ── Experiment Configuration ─────────────────────────────────────────────\n",
     "# Adjust these values to trade off training time vs. model quality.\n",
     "\n",
-    "# \u2500\u2500 Model \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Model ────────────────────────────────────────────────────────────────\n",
     "BASE_MODEL   = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'\n",
     "\n",
-    "# \u2500\u2500 Federated Learning \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
-    "FL_ROUNDS    = 20       # 20 rounds \u2248 10\u201315 units on T4\n",
+    "# ── Federated Learning ───────────────────────────────────────────────────\n",
+    "FL_ROUNDS    = 20       # 20 rounds ≈ 10–15 units on T4\n",
     "LOCAL_EPOCHS = 1        # Epochs per hospital per round\n",
     "BATCH_SIZE   = 4        # Reduce to 2 if OOM\n",
-    "GRAD_ACCUM   = 4        # Effective batch = BATCH_SIZE \u00d7 GRAD_ACCUM = 16\n",
+    "GRAD_ACCUM   = 4        # Effective batch = BATCH_SIZE × GRAD_ACCUM = 16\n",
     "MAX_LENGTH   = 512      # Token sequence length\n",
     "LR           = 2e-4\n",
     "\n",
-    "# \u2500\u2500 LoRA \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── LoRA ─────────────────────────────────────────────────────────────────\n",
     "LORA_R       = 8\n",
     "LORA_ALPHA   = 16\n",
     "LORA_TARGETS = ['q_proj', 'v_proj']\n",
     "\n",
-    "# \u2500\u2500 Differential Privacy (Gaussian mechanism) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Differential Privacy (Gaussian mechanism) ────────────────────────────\n",
     "DP_ENABLED       = True\n",
-    "DP_EPSILON       = 8.0   # (\u03b5, \u03b4)-DP guarantee; lower = more private, more noise\n",
+    "DP_EPSILON       = 8.0   # (ε, δ)-DP guarantee; lower = more private, more noise\n",
     "DP_DELTA         = 1e-5\n",
     "DP_MAX_GRAD_NORM = 1.0   # Clipping threshold C\n",
     "\n",
-    "# \u2500\u2500 Adaptive DP \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
-    "ADAPTIVE_DP      = True  # Per-client \u03b5 allocation based on loss & sensitivity\n",
+    "# ── Adaptive DP ──────────────────────────────────────────────────────────\n",
+    "ADAPTIVE_DP      = True  # Per-client ε allocation based on loss & sensitivity\n",
     "ADAPTIVE_EMA     = 0.1   # EMA smoothing for gradient sensitivity\n",
-    "ADAPTIVE_FLOOR   = 0.1   # Min fraction of base \u03b5 (prevents starvation)\n",
+    "ADAPTIVE_FLOOR   = 0.1   # Min fraction of base ε (prevents starvation)\n",
     "\n",
-    "# \u2500\u2500 Hospital registry \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Hospital registry ────────────────────────────────────────────────────\n",
     "HOSPITALS = {\n",
     "    'hospital_A': {\n",
     "        'name': 'Metro General (Cardiology)',\n",
@@ -146,7 +137,7 @@
     "    },\n",
     "}\n",
     "\n",
-    "# \u2500\u2500 Paths \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Paths ────────────────────────────────────────────────────────────────\n",
     "DRIVE_ROOT   = '/content/drive/MyDrive/MedTrace'\n",
     "CKPT_DIR     = f'{DRIVE_ROOT}/checkpoints'\n",
     "MODEL_DIR    = f'{DRIVE_ROOT}/federated-model'\n",
@@ -161,24 +152,20 @@
     "DP_SIGMA = DP_MAX_GRAD_NORM * math.sqrt(2 * math.log(1.25 / DP_DELTA)) / DP_EPSILON\n",
     "print('Configuration summary')\n",
     "print(f'  Rounds: {FL_ROUNDS} | Hospitals: {len(HOSPITALS)} | Local epochs: {LOCAL_EPOCHS}')\n",
-    "print(f'  LoRA r={LORA_R}, alpha={LORA_ALPHA} | Batch={BATCH_SIZE}\u00d7{GRAD_ACCUM}')\n",
+    "print(f'  LoRA r={LORA_R}, alpha={LORA_ALPHA} | Batch={BATCH_SIZE}×{GRAD_ACCUM}')\n",
     "if DP_ENABLED:\n",
-    "    print(f'  DP: \u03b5={DP_EPSILON}, \u03b4={DP_DELTA}, \u03c3={DP_SIGMA:.4f}, C={DP_MAX_GRAD_NORM}')\n",
-    "    print(f'  Adaptive DP: {ADAPTIVE_DP} | EMA \u03b1={ADAPTIVE_EMA} | floor={ADAPTIVE_FLOOR}')\n",
+    "    print(f'  DP: ε={DP_EPSILON}, δ={DP_DELTA}, σ={DP_SIGMA:.4f}, C={DP_MAX_GRAD_NORM}')\n",
+    "    print(f'  Adaptive DP: {ADAPTIVE_DP} | EMA α={ADAPTIVE_EMA} | floor={ADAPTIVE_FLOOR}')\n",
     "    per_round_eps = DP_EPSILON / math.sqrt(FL_ROUNDS)\n",
-    "    print(f'  Per-round \u03b5: {per_round_eps:.4f} (advanced composition)')\n",
+    "    print(f'  Per-round ε: {per_round_eps:.4f} (advanced composition)')\n",
     "else:\n",
     "    print('  DP: disabled (no-privacy baseline)')\n",
-    "print(f'  Drive checkpoints: {CKPT_DIR}')\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Core Classes: Hospital Client + Adaptive DP + Federated Server \u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "print(f'  Drive checkpoints: {CKPT_DIR}')\n",
+)
+
+# ── Cell 4: Core Classes ─────────────────────────────────────────────────────
+code(
+    "# ── Core Classes: Hospital Client + Adaptive DP + Federated Server ───────\n",
     "import copy, re, time, json\n",
     "import numpy as np\n",
     "from collections import OrderedDict\n",
@@ -192,7 +179,7 @@
     "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n",
     "\n",
     "\n",
-    "# \u2500\u2500 Adaptive DP State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Adaptive DP State ──────────────────────────────────────────────────────\n",
     "class ClientDPState:\n",
     "    def __init__(self, hospital_id, init_sensitivity=1.0):\n",
     "        self.hospital_id    = hospital_id\n",
@@ -209,7 +196,7 @@
     "class AdaptiveDPMechanism:\n",
     "    \"\"\"\n",
     "    Per-client noise calibration.\n",
-    "    Converged hospitals (low loss) get more \u03b5 \u2192 less noise \u2192 cleaner updates.\n",
+    "    Converged hospitals (low loss) get more ε → less noise → cleaner updates.\n",
     "    \"\"\"\n",
     "    def __init__(self, hospital_ids, global_eps, delta, fl_rounds,\n",
     "                 init_sensitivity=1.0, ema_alpha=0.1, min_frac=0.1):\n",
@@ -219,12 +206,12 @@
     "        self.ema_alpha  = ema_alpha\n",
     "        self.min_frac   = min_frac\n",
     "        self.states = {hid: ClientDPState(hid, init_sensitivity) for hid in hospital_ids}\n",
-    "        print(f'Adaptive DP: \u03b5={global_eps} \u03b4={delta} \u03b1={ema_alpha} floor={min_frac}')\n",
+    "        print(f'Adaptive DP: ε={global_eps} δ={delta} α={ema_alpha} floor={min_frac}')\n",
     "\n",
     "    def compute_allocation(self, round_num):\n",
     "        base_eps = self.global_epsilon / math.sqrt(self.fl_rounds)\n",
     "        losses = {hid: s.latest_loss for hid, s in self.states.items()}\n",
-    "        # Softmax over inverse loss (low loss \u2192 high weight \u2192 more \u03b5)\n",
+    "        # Softmax over inverse loss (low loss → high weight → more ε)\n",
     "        inv = {hid: (1.0 / l if l > 0 and l != float('inf') else 1.0)\n",
     "               for hid, l in losses.items()}\n",
     "        total_inv = sum(inv.values())\n",
@@ -262,7 +249,7 @@
     "\n",
     "        state.budget_spent += round_epsilon\n",
     "        state.round_epsilons.append(round_epsilon)\n",
-    "        print(f'  Adaptive DP | C\u1d62={clip_norm:.3f} \u03c3={sigma:.4f} \u03b5_r={round_epsilon:.4f} '\n",
+    "        print(f'  Adaptive DP | Cᵢ={clip_norm:.3f} σ={sigma:.4f} ε_r={round_epsilon:.4f} '\n",
     "              f'spent={state.budget_spent:.3f}/{self.global_epsilon}')\n",
     "        return noisy\n",
     "\n",
@@ -277,7 +264,7 @@
     "        }\n",
     "\n",
     "\n",
-    "# \u2500\u2500 Hospital Client \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Hospital Client ────────────────────────────────────────────────────────\n",
     "class HospitalClient:\n",
     "    def __init__(self, hospital_id, config):\n",
     "        self.hid          = hospital_id\n",
@@ -289,7 +276,7 @@
     "        self.local_data   = None\n",
     "        self.budget_spent = 0.0\n",
     "        self.round_losses = []\n",
-    "        print(f'  \u2713 {self.name} ({self.location})')\n",
+    "        print(f'  ✓ {self.name} ({self.location})')\n",
     "\n",
     "    def prepare_data(self, full_dataset, round_num):\n",
     "        pattern = re.compile('|'.join(re.escape(k) for k in self.keywords), re.IGNORECASE)\n",
@@ -317,7 +304,7 @@
     "\n",
     "    def train_local(self, global_weights, tokenizer, round_num,\n",
     "                    base_model=None, adaptive_dp=None, round_epsilon=None):\n",
-    "        print(f'\\n  \u2500\u2500 {self.name} | Round {round_num+1} \u2500\u2500')\n",
+    "        print(f'\\n  ── {self.name} | Round {round_num+1} ──')\n",
     "        t0 = time.time()\n",
     "\n",
     "        owns_base = base_model is None\n",
@@ -390,7 +377,7 @@
     "                    lora_w[name] = p + torch.randn_like(p) * DP_SIGMA\n",
     "            per_round_eps = DP_EPSILON / math.sqrt(FL_ROUNDS)\n",
     "            self.budget_spent += per_round_eps\n",
-    "            print(f'  Standard DP | \u03c3={DP_SIGMA:.4f} | Budget: {self.budget_spent:.3f}/{DP_EPSILON}')\n",
+    "            print(f'  Standard DP | σ={DP_SIGMA:.4f} | Budget: {self.budget_spent:.3f}/{DP_EPSILON}')\n",
     "\n",
     "        train_loss = (\n",
     "            trainer.state.log_history[-1].get('train_loss', 0.0)\n",
@@ -417,7 +404,7 @@
     "        }\n",
     "\n",
     "\n",
-    "# \u2500\u2500 Federated Server \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "# ── Federated Server ───────────────────────────────────────────────────────\n",
     "class FederatedServer:\n",
     "    def __init__(self):\n",
     "        self.global_weights = None\n",
@@ -447,7 +434,7 @@
     "        total_samples = sum(m['num_samples'] for _, m in client_updates.values())\n",
     "        fracs = {hid: m['num_samples'] / total_samples for hid, (_, m) in client_updates.items()}\n",
     "\n",
-    "        # Streaming FedAvg \u2014 O(2\u00d7model_size) memory\n",
+    "        # Streaming FedAvg — O(2×model_size) memory\n",
     "        aggregated = OrderedDict()\n",
     "        for hid, (weights, metrics) in client_updates.items():\n",
     "            frac = fracs[hid]\n",
@@ -503,23 +490,19 @@
     "        print(f'  Model saved to: {d}')\n",
     "        return d\n",
     "\n",
-    "print('\u2705  All classes defined')\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Checkpoint helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "print('✅  All classes defined')\n",
+)
+
+# ── Cell 5: Checkpoint helpers ───────────────────────────────────────────────
+code(
+    "# ── Checkpoint helpers ────────────────────────────────────────────────────\n",
     "def save_checkpoint(weights, round_num):\n",
     "    path = os.path.join(CKPT_DIR, f'round_{round_num}.pt')\n",
     "    torch.save(weights, path)\n",
     "    with open(os.path.join(CKPT_DIR, 'last_round.txt'), 'w') as f:\n",
     "        f.write(str(round_num))\n",
     "    size_mb = os.path.getsize(path) / (1024 * 1024)\n",
-    "    print(f'  \u2705 Checkpoint saved: round_{round_num}.pt ({size_mb:.2f} MB)')\n",
+    "    print(f'  ✅ Checkpoint saved: round_{round_num}.pt ({size_mb:.2f} MB)')\n",
     "\n",
     "def load_checkpoint():\n",
     "    marker = os.path.join(CKPT_DIR, 'last_round.txt')\n",
@@ -529,23 +512,19 @@
     "        last = int(f.read().strip())\n",
     "    path = os.path.join(CKPT_DIR, f'round_{last}.pt')\n",
     "    if not os.path.exists(path):\n",
-    "        print(f'  \u26a0\ufe0f  Marker says round {last} but file missing \u2014 starting fresh')\n",
+    "        print(f'  ⚠️  Marker says round {last} but file missing — starting fresh')\n",
     "        return None, -1\n",
     "    weights = torch.load(path, map_location='cpu', weights_only=False)\n",
     "    size_mb = os.path.getsize(path) / (1024 * 1024)\n",
-    "    print(f'  \u2705 Resumed from round_{last}.pt ({size_mb:.2f} MB)')\n",
+    "    print(f'  ✅ Resumed from round_{last}.pt ({size_mb:.2f} MB)')\n",
     "    return weights, last\n",
     "\n",
-    "print('\u2705  Checkpoint helpers ready')\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Federated Training Loop \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "print('✅  Checkpoint helpers ready')\n",
+)
+
+# ── Cell 6: Training loop ────────────────────────────────────────────────────
+code(
+    "# ── Federated Training Loop ───────────────────────────────────────────────\n",
     "# Run-All safe: resumes from the last Drive checkpoint automatically.\n",
     "\n",
     "print('Loading MedQA USMLE dataset...')\n",
@@ -563,14 +542,14 @@
     "start_round = last_round + 1\n",
     "\n",
     "if global_w is None:\n",
-    "    print('\\nNo checkpoint \u2014 starting fresh')\n",
+    "    print('\\nNo checkpoint — starting fresh')\n",
     "    global_w = server.init_global_model()\n",
     "    start_round = 0\n",
     "else:\n",
     "    server.global_weights = global_w\n",
     "    print(f'Resuming from round {start_round + 1}/{FL_ROUNDS}')\n",
     "\n",
-    "# Adaptive DP mechanism (per-client \u03b5 allocation)\n",
+    "# Adaptive DP mechanism (per-client ε allocation)\n",
     "adaptive_dp = None\n",
     "if DP_ENABLED and ADAPTIVE_DP:\n",
     "    adaptive_dp = AdaptiveDPMechanism(\n",
@@ -592,11 +571,11 @@
     "    for client in hospitals.values():\n",
     "        client.prepare_data(dataset, r)\n",
     "\n",
-    "    # Compute per-client \u03b5 BEFORE training\n",
+    "    # Compute per-client ε BEFORE training\n",
     "    round_alloc = {}\n",
     "    if adaptive_dp is not None:\n",
     "        round_alloc = adaptive_dp.compute_allocation(r)\n",
-    "        print(f'  Adaptive \u03b5: ' +\n",
+    "        print(f'  Adaptive ε: ' +\n",
     "              ', '.join(f'{hid}={e:.4f}' for hid, e in round_alloc.items()))\n",
     "\n",
     "    # Load shared base model ONCE per round (saves ~30s per round)\n",
@@ -604,7 +583,7 @@
     "    shared_base = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)\n",
     "    shared_base.eval()\n",
     "\n",
-    "    # Local training \u2014 each hospital trains on its private data\n",
+    "    # Local training — each hospital trains on its private data\n",
     "    client_updates = {}\n",
     "    failed = []\n",
     "    for hid, client in hospitals.items():\n",
@@ -617,20 +596,20 @@
     "            )\n",
     "            client_updates[hid] = (w, m)\n",
     "        except Exception as exc:\n",
-    "            print(f'  \u26a0\ufe0f  {hid} FAILED (skipping): {exc}')\n",
+    "            print(f'  ⚠️  {hid} FAILED (skipping): {exc}')\n",
     "            failed.append(hid)\n",
     "\n",
     "    del shared_base\n",
     "    if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
     "\n",
     "    if not client_updates:\n",
-    "        print('  \u274c ALL clients failed \u2014 skipping round')\n",
+    "        print('  ❌ ALL clients failed — skipping round')\n",
     "        continue\n",
     "    if failed:\n",
-    "        print(f'  \u26a0\ufe0f  {len(failed)}/{len(hospitals)} clients failed; '\n",
+    "        print(f'  ⚠️  {len(failed)}/{len(hospitals)} clients failed; '\n",
     "              f'aggregating {len(client_updates)} successful clients')\n",
     "\n",
-    "    # Record losses for next round's adaptive \u03b5 allocation\n",
+    "    # Record losses for next round's adaptive ε allocation\n",
     "    if adaptive_dp is not None:\n",
     "        for hid, (_, m) in client_updates.items():\n",
     "            adaptive_dp.record_loss(hid, m.get('train_loss', float('inf')))\n",
@@ -659,14 +638,14 @@
     "    }\n",
     "    training_log.append(log_entry)\n",
     "\n",
-    "    print(f'\\n  \u23f1  Round {r+1} done in {round_elapsed:.0f}s | ETA: {eta_min:.0f} min')\n",
-    "    print(f'  \ud83d\udcca avg_loss={log_entry[\"avg_loss\"]:.4f} | '\n",
+    "    print(f'\\n  ⏱  Round {r+1} done in {round_elapsed:.0f}s | ETA: {eta_min:.0f} min')\n",
+    "    print(f'  📊 avg_loss={log_entry[\"avg_loss\"]:.4f} | '\n",
     "          f'divergence={log_entry[\"weight_divergence\"]:.6f} | '\n",
     "          f'DP budget used: {budget_pct:.1f}%')\n",
     "\n",
     "total_elapsed = time.time() - total_t0\n",
     "print(f'\\n{\"=\"*65}')\n",
-    "print(f'  \ud83c\udfc1 TRAINING COMPLETE')\n",
+    "print(f'  🏁 TRAINING COMPLETE')\n",
     "print(f'  Total time: {total_elapsed/60:.1f} min | Rounds: {FL_ROUNDS - start_round}')\n",
     "print(f'{\"=\"*65}')\n",
     "\n",
@@ -687,22 +666,18 @@
     "report_path = os.path.join(RESULTS_DIR, 'training_report.json')\n",
     "with open(report_path, 'w') as f:\n",
     "    json.dump(report, f, indent=2, default=str)\n",
-    "print(f'\\nReport saved: {report_path}')\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Training Plots \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "print(f'\\nReport saved: {report_path}')\n",
+)
+
+# ── Cell 7: Plots ────────────────────────────────────────────────────────────
+code(
+    "# ── Training Plots ────────────────────────────────────────────────────────\n",
     "import matplotlib.pyplot as plt\n",
     "import matplotlib\n",
     "matplotlib.rcParams.update({'font.size': 11, 'figure.dpi': 120})\n",
     "\n",
     "if not training_log:\n",
-    "    print('No training log \u2014 run the training cell first')\n",
+    "    print('No training log — run the training cell first')\n",
     "else:\n",
     "    rounds   = [e['round']             for e in training_log]\n",
     "    losses   = [e['avg_loss']          for e in training_log]\n",
@@ -711,7 +686,7 @@
     "    times    = [e['time_seconds']      for e in training_log]\n",
     "\n",
     "    fig, axes = plt.subplots(2, 2, figsize=(14, 8))\n",
-    "    fig.suptitle('MedTrace FL \u2014 Training Summary', fontsize=14, fontweight='bold')\n",
+    "    fig.suptitle('MedTrace FL — Training Summary', fontsize=14, fontweight='bold')\n",
     "\n",
     "    ax = axes[0, 0]\n",
     "    ax.plot(rounds, losses, 'o-', color='#2196F3', linewidth=2, markersize=5)\n",
@@ -731,7 +706,7 @@
     "        ax.set_ylabel('Budget used (%)')\n",
     "    else:\n",
     "        ax.text(0.5, 0.5, 'DP disabled', ha='center', va='center', transform=ax.transAxes)\n",
-    "    ax.set_title('Privacy Budget Consumed (\u03b5)'); ax.set_xlabel('Round')\n",
+    "    ax.set_title('Privacy Budget Consumed (ε)'); ax.set_xlabel('Round')\n",
     "    ax.grid(True, alpha=0.3); ax.set_xlim(left=1)\n",
     "\n",
     "    ax = axes[1, 1]\n",
@@ -746,22 +721,18 @@
     "    print(f'Plot saved: {plot_path}')\n",
     "\n",
     "    # Print summary table\n",
-    "    print(f'\\n{\"\u2500\"*50}')\n",
+    "    print(f'\\n{\"─\"*50}')\n",
     "    print(f'{\"Round\":>6}  {\"Avg Loss\":>10}  {\"Divergence\":>12}  {\"DP Budget %\":>12}')\n",
-    "    print(f'{\"\u2500\"*50}')\n",
+    "    print(f'{\"─\"*50}')\n",
     "    for e in training_log:\n",
     "        print(f'{e[\"round\"]:>6}  {e[\"avg_loss\"]:>10.4f}  '\n",
     "              f'{e[\"weight_divergence\"]:>12.6f}  {e[\"privacy_budget_pct\"]:>11.1f}%')\n",
-    "    print(f'{\"\u2500\"*50}')\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Evaluate Federated Model \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "    print(f'{\"─\"*50}')\n",
+)
+
+# ── Cell 8: Evaluation ───────────────────────────────────────────────────────
+code(
+    "# ── Evaluate Federated Model ──────────────────────────────────────────────\n",
     "EVAL_QUESTIONS = [\n",
     "    ('Cardiology',\n",
     "     'A 62-year-old man with hypertension and diabetes presents with crushing substernal '\n",
@@ -804,7 +775,7 @@
     "    print(f'[{specialty}]')\n",
     "    print(f'Q: {question[:120]}...' if len(question) > 120 else f'Q: {question}')\n",
     "    print(f'A: {response[:600]}')\n",
-    "    print('\u2500' * 70 + '\\n')\n",
+    "    print('─' * 70 + '\\n')\n",
     "\n",
     "# Save eval results\n",
     "eval_path = os.path.join(RESULTS_DIR, 'eval_responses.json')\n",
@@ -813,16 +784,12 @@
     "print(f'Evaluation saved: {eval_path}')\n",
     "\n",
     "del model, base\n",
-    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n"
-   ]
-  },
-  {
-   "cell_type": "code",
-   "metadata": {},
-   "execution_count": null,
-   "outputs": [],
-   "source": [
-    "# \u2500\u2500 Interactive Chat \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+    "if torch.cuda.is_available(): torch.cuda.empty_cache()\n",
+)
+
+# ── Cell 9: Interactive ──────────────────────────────────────────────────────
+code(
+    "# ── Interactive Chat ──────────────────────────────────────────────────────\n",
     "print('Loading model for interactive use...')\n",
     "base  = AutoModelForCausalLM.from_pretrained(BASE_MODEL, torch_dtype=torch.float32)\n",
     "model = PeftModel.from_pretrained(base, MODEL_DIR)\n",
@@ -842,8 +809,28 @@
     "            repetition_penalty=1.1,\n",
     "        )\n",
     "    ans = tokenizer.decode(output[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)\n",
-    "    print(f'\\n{\"\u2550\"*65}\\n{ans}\\n{\"\u2550\"*65}\\n')\n"
-   ]
-  }
- ]
+    "    print(f'\\n{\"═\"*65}\\n{ans}\\n{\"═\"*65}\\n')\n",
+)
+
+# ── Build notebook ───────────────────────────────────────────────────────────
+notebook = {
+    "nbformat": 4,
+    "nbformat_minor": 0,
+    "metadata": {
+        "colab": {
+            "provenance": [],
+            "gpuType": "T4",
+            "toc_visible": True,
+        },
+        "kernelspec": {"display_name": "Python 3", "name": "python3"},
+        "language_info": {"name": "python"},
+        "accelerator": "GPU",
+    },
+    "cells": cells,
 }
+
+out = "/sessions/magical-serene-newton/mnt/Downloads/medtrace/MedTrace_FL_Colab.ipynb"
+with open(out, "w") as f:
+    json.dump(notebook, f, indent=1)
+print(f"Notebook written: {out}")
+print(f"Cells: {len(cells)}")
