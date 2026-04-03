@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import time
 from collections import OrderedDict
 from typing import List, Optional, Tuple
@@ -70,17 +71,34 @@ class HospitalClient:
         """
         Simulate non-IID data distribution.
         Each hospital gets a biased subset reflecting its specialty.
+
+        Scalability notes
+        -----------------
+        * Keywords are compiled into a single regex pattern once per call so
+          classification is O(|dataset|) rather than O(|dataset| × |keywords|).
+        * If the dataset is smaller than ``num_samples``, sampling uses
+          replacement so training always sees the configured batch size.
+        * If zero specialty examples are found (unlikely but possible with
+          unusual datasets), the hospital falls back to random sampling with a
+          warning rather than crashing.
         """
         keywords = self.config.specialty_keywords
-        num_samples = self.config.num_samples
+        num_samples = min(self.config.num_samples, len(full_dataset))
         specialty_ratio = self.config.specialty_ratio
+
+        # Compile keyword list into one regex for O(n) classification.
+        # re.escape protects against keywords that contain regex meta-chars.
+        pattern = re.compile(
+            "|".join(re.escape(kw) for kw in keywords),
+            re.IGNORECASE,
+        )
 
         # Classify examples: specialty vs general
         spec_idx: List[int] = []
         gen_idx: List[int] = []
         for i, example in enumerate(full_dataset):
-            question = example.get("question", "").lower()
-            if any(kw in question for kw in keywords):
+            question = example.get("question", "")
+            if pattern.search(question):
                 spec_idx.append(i)
             else:
                 gen_idx.append(i)
@@ -90,13 +108,24 @@ class HospitalClient:
         rng = np.random.RandomState(seed)
 
         n_spec = min(int(num_samples * specialty_ratio), len(spec_idx))
-        n_gen = num_samples - n_spec
+        n_gen  = num_samples - n_spec
 
         chosen: List[int] = []
-        if n_spec > 0 and len(spec_idx) > 0:
+        if n_spec > 0 and spec_idx:
             chosen.extend(rng.choice(spec_idx, n_spec, replace=True).tolist())
-        if n_gen > 0 and len(gen_idx) > 0:
-            chosen.extend(rng.choice(gen_idx, min(n_gen, len(gen_idx)), replace=True).tolist())
+        if n_gen > 0 and gen_idx:
+            chosen.extend(rng.choice(gen_idx, n_gen, replace=True).tolist())
+
+        # Fallback: if both pools are empty (should not happen with real data),
+        # sample randomly from the full dataset rather than crashing.
+        if not chosen:
+            logger.warning(
+                "%s: no samples matched specialty/general split — "
+                "falling back to random sampling from full dataset.",
+                self.name,
+            )
+            all_idx = list(range(len(full_dataset)))
+            chosen = rng.choice(all_idx, num_samples, replace=True).tolist()
 
         # Shuffle
         seed2 = abs(hash(self.hospital_id) + round_num + 42) % (2**32)
@@ -104,7 +133,10 @@ class HospitalClient:
         rng2.shuffle(chosen)
 
         self.local_data = full_dataset.select(chosen[:num_samples])
-        logger.info("%s: %d samples (%d specialty)", self.name, len(self.local_data), n_spec)
+        logger.info(
+            "%s: %d samples (specialty=%d, general=%d)",
+            self.name, len(self.local_data), n_spec, len(chosen) - n_spec,
+        )
         return self.local_data
 
     # ─── Local Training ───────────────────────────────────────

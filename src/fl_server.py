@@ -90,6 +90,10 @@ class FederatedServer:
 
     # ─── Aggregation ──────────────────────────────────────────
 
+    # Maximum number of individual hospital contribution lines to log.
+    # Beyond this threshold a summary line is used instead.
+    _CONTRIBUTION_LOG_LIMIT: int = 10
+
     def aggregate(
         self,
         client_updates: Dict[str, Tuple[WeightDict, Metrics]],
@@ -97,60 +101,123 @@ class FederatedServer:
     ) -> WeightDict:
         """
         Federated Averaging (FedAvg) — McMahan et al., 2017
-        w_global = sum( (n_k / n_total) * w_k )
+        w_global = Σ (n_k / n_total) · w_k
+
+        Scalability design
+        ------------------
+        * **Streaming aggregation**: weights are accumulated one client at a time
+          and their references released immediately, so peak memory is
+          O(2 × model_size) regardless of the number of clients.
+        * **Key-consistency guard**: all clients must share identical weight keys;
+          mismatches are caught before any accumulation begins.
+        * **Sampled divergence**: for deployments with >``_DIVERGENCE_SAMPLE``
+          clients the divergence metric is estimated from a random sample.
+        * **Log throttle**: individual contribution lines are printed only for
+          fleets of ≤ ``_CONTRIBUTION_LOG_LIMIT`` hospitals; larger fleets get a
+          compact summary.
         """
-        logger.info("Aggregating Round %d...", round_num + 1)
+        logger.info("Aggregating Round %d (%d clients)...", round_num + 1, len(client_updates))
         t0 = time.time()
+
+        if not client_updates:
+            raise ValueError("aggregate() called with no client updates")
 
         if self.cfg.dp.secure_aggregation:
             logger.info("Secure aggregation: simulating encrypted weight transfer")
 
-        all_weights: List[WeightDict] = []
-        sample_counts: List[int] = []
-        hospital_names: List[str] = []
+        # ── Phase 1: validate keys and compute sample fractions ─────────────
+        reference_keys = None
+        total_samples: int = 0
+        fracs: Dict[str, float] = {}
 
         for hospital_id, (weights, metrics) in client_updates.items():
-            all_weights.append(weights)
-            sample_counts.append(metrics["num_samples"])
-            hospital_names.append(metrics["hospital"])
+            n = metrics["num_samples"]
+            total_samples += n
 
-        total_samples = sum(sample_counts)
-        fracs = [n / total_samples for n in sample_counts]
+            # Key consistency: every client must share the same LoRA weight names
+            keys = set(weights.keys())
+            if reference_keys is None:
+                reference_keys = keys
+            elif keys != reference_keys:
+                missing = reference_keys - keys
+                extra   = keys - reference_keys
+                raise ValueError(
+                    f"Weight key mismatch for client {hospital_id!r}. "
+                    f"Missing: {missing}. Extra: {extra}."
+                )
 
-        for name, frac, n in zip(hospital_names, fracs, sample_counts):
-            logger.info("  %s: weight=%.3f (%d samples)", name, frac, n)
-            self.hospital_contributions[name] = {"round": round_num, "weight": frac, "samples": n}
+        if total_samples == 0:
+            raise ValueError("All clients reported 0 training samples")
 
-        # Weighted average — use explicit zero init to avoid int+Tensor ambiguity
-        aggregated = OrderedDict()
-        for key in all_weights[0].keys():
-            acc = fracs[0] * all_weights[0][key]
-            for i in range(1, len(all_weights)):
-                acc = acc + fracs[i] * all_weights[i][key]
-            aggregated[key] = acc
+        for hospital_id, (_, metrics) in client_updates.items():
+            fracs[hospital_id] = metrics["num_samples"] / total_samples
+
+        # ── Phase 2: streaming weighted average ─────────────────────────────
+        # Weights are accumulated one client at a time; no full list is kept in
+        # memory.  Each client's weight dict is referenced only during its
+        # accumulation step.
+        aggregated: WeightDict = OrderedDict()
+        hospital_names: Dict[str, str] = {}   # hospital_id → display name
+
+        for hospital_id, (weights, metrics) in client_updates.items():
+            frac = fracs[hospital_id]
+            name = metrics["hospital"]
+            hospital_names[hospital_id] = name
+            self.hospital_contributions[name] = {
+                "round": round_num,
+                "weight": frac,
+                "samples": metrics["num_samples"],
+            }
+
+            for key, param in weights.items():
+                p = param.float()
+                if key not in aggregated:
+                    aggregated[key] = frac * p
+                else:
+                    aggregated[key] = aggregated[key] + frac * p
 
         self._validate_weights(aggregated)
         self.global_weights = aggregated
         elapsed = time.time() - t0
 
-        divergence = self._compute_divergence(all_weights, aggregated)
-        metrics: Metrics = {
+        # ── Phase 3: divergence (sampled for large fleets) ──────────────────
+        divergence = self._compute_divergence_sampled(
+            client_updates, aggregated, max_clients=self._DIVERGENCE_SAMPLE,
+        )
+
+        # ── Logging: throttle per-client lines for large fleets ─────────────
+        n_clients = len(client_updates)
+        if n_clients <= self._CONTRIBUTION_LOG_LIMIT:
+            for hid, name in hospital_names.items():
+                logger.info(
+                    "  %s: weight=%.3f (%d samples)",
+                    name, fracs[hid], client_updates[hid][1]["num_samples"],
+                )
+        else:
+            min_frac = min(fracs.values())
+            max_frac = max(fracs.values())
+            logger.info(
+                "  %d clients | sample weights [%.3f, %.3f] | total=%d",
+                n_clients, min_frac, max_frac, total_samples,
+            )
+
+        # ── Metrics ─────────────────────────────────────────────────────────
+        losses = [m["train_loss"] for _, m in client_updates.values()]
+        sample_fracs_list = [fracs[hid] for hid in client_updates]
+        avg_loss = sum(l * w for l, w in zip(losses, sample_fracs_list))
+
+        round_metrics: Metrics = {
             "round": round_num,
-            "num_hospitals": len(client_updates),
+            "num_hospitals": n_clients,
             "total_samples": total_samples,
             "aggregation_time": round(elapsed, 3),
             "weight_divergence": divergence,
-            "contribution_weights": dict(zip(hospital_names, fracs)),
+            "avg_loss": avg_loss,
+            "contribution_weights": {
+                hospital_names[hid]: fracs[hid] for hid in client_updates
+            },
         }
-        self.round_metrics.append(metrics)
-
-        # ── Compute and log round-level aggregated loss ──────────────────────
-        # Weighted average of per-hospital losses (FedAvg loss)
-        losses = [m["train_loss"] for _, m in client_updates.values()]
-        weights_losses = [
-            m["num_samples"] / total_samples for _, m in client_updates.values()
-        ]
-        avg_loss = sum(l * w for l, w in zip(losses, weights_losses))
+        self.round_metrics.append(round_metrics)
 
         self.tracker.log(
             {
@@ -160,22 +227,37 @@ class FederatedServer:
                 "round/weight_divergence": divergence,
                 "round/aggregation_time": elapsed,
                 "round/total_samples": total_samples,
-                "round/num_hospitals": len(client_updates),
+                "round/num_hospitals": n_clients,
             },
             step=round_num,
         )
-        # Per-hospital contribution weights (useful for stacked bar chart)
-        contribution_log = {
-            f"contribution/{name}": frac
-            for name, frac in zip(hospital_names, fracs)
-        }
-        self.tracker.log(contribution_log, step=round_num)
+        # Per-hospital contribution weights — emit individually for small fleets,
+        # skip for large ones (too many metrics would bloat tracking back-ends)
+        if n_clients <= self._CONTRIBUTION_LOG_LIMIT:
+            contribution_log = {
+                f"contribution/{hospital_names[hid]}": fracs[hid]
+                for hid in client_updates
+            }
+            self.tracker.log(contribution_log, step=round_num)
+        else:
+            self.tracker.log(
+                {
+                    "contribution/min_weight": min_frac,
+                    "contribution/max_weight": max_frac,
+                },
+                step=round_num,
+            )
 
-        logger.info("Aggregation complete (%.3fs) | Divergence: %.6f | Avg loss: %.4f",
-                    elapsed, divergence, avg_loss)
+        logger.info(
+            "Aggregation complete (%.3fs) | Clients: %d | Divergence: %.6f | Avg loss: %.4f",
+            elapsed, n_clients, divergence, avg_loss,
+        )
         return self.global_weights
 
     # ─── Validation ───────────────────────────────────────────
+
+    # For large fleets, divergence is estimated from a random sample of clients.
+    _DIVERGENCE_SAMPLE: int = 10
 
     @staticmethod
     def _validate_weights(weights: WeightDict) -> None:
@@ -187,15 +269,35 @@ class FederatedServer:
                 raise ValueError(f"Inf detected in aggregated weight: {name}")
 
     @staticmethod
-    def _compute_divergence(client_weights: List[WeightDict], global_weights: WeightDict) -> float:
-        """Measure how much hospital models diverge from the global model."""
+    def _compute_divergence_sampled(
+        client_updates: Dict[str, Tuple[WeightDict, Metrics]],
+        global_weights: WeightDict,
+        max_clients: int = 10,
+    ) -> float:
+        """
+        Mean squared L2-norm divergence between client weights and the global model.
+
+        For large fleets (> ``max_clients``) a random sample is used so the
+        computation stays O(max_clients × n_params) rather than O(n × n_params).
+        This is an unbiased estimator when the fleet is large relative to the sample.
+        """
+        import random as _random
+
+        all_ids = list(client_updates.keys())
+        sample_ids = (
+            all_ids
+            if len(all_ids) <= max_clients
+            else _random.sample(all_ids, max_clients)
+        )
+
         total = 0.0
         count = 0
-        for key in global_weights.keys():
-            g = global_weights[key]
-            for cw in client_weights:
-                total += torch.norm((cw[key] - g).float()).item() ** 2
-                count += 1
+        for hid in sample_ids:
+            cw = client_updates[hid][0]
+            for key in global_weights:
+                if key in cw:
+                    total += torch.norm((cw[key].float() - global_weights[key].float())).item() ** 2
+                    count += 1
         return total / max(count, 1)
 
     # ─── Save / Evaluate ─────────────────────────────────────

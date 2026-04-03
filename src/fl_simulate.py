@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from datasets import load_dataset
@@ -186,6 +186,13 @@ def run_simulation(
                 "ON" if cfg.dp.enabled else "OFF", cfg.dp.epsilon)
     logger.info("=" * 60)
 
+    # Fail fast with a clear message instead of an obscure error later
+    if not cfg.hospitals:
+        raise ValueError(
+            "FLConfig.hospitals is empty — provide at least one hospital. "
+            "Use HospitalRegistry.build(n) to create n hospital configs."
+        )
+
     device = detect_device()
 
     # Data
@@ -295,15 +302,39 @@ def run_simulation(
             )
 
         client_updates = {}
+        failed_clients: List[str] = []
         for hid, client in hospitals.items():
-            w, m = client.train_local(
-                global_weights, tokenizer, round_num,
-                cfg.hospital_models_dir, base_model=shared_base,
-                tracker=tracker,
-                adaptive_dp_mechanism=adaptive_dp,
-                round_epsilon=round_allocations.get(hid),
+            try:
+                w, m = client.train_local(
+                    global_weights, tokenizer, round_num,
+                    cfg.hospital_models_dir, base_model=shared_base,
+                    tracker=tracker,
+                    adaptive_dp_mechanism=adaptive_dp,
+                    round_epsilon=round_allocations.get(hid),
+                )
+                client_updates[hid] = (w, m)
+            except Exception as _client_exc:
+                logger.warning(
+                    "Client %s failed round %d (skipped from aggregation): %s",
+                    hid, round_num + 1, _client_exc,
+                )
+                failed_clients.append(hid)
+
+        if not client_updates:
+            logger.error(
+                "ALL %d clients failed round %d — skipping aggregation.",
+                len(hospitals), round_num + 1,
             )
-            client_updates[hid] = (w, m)
+            del shared_base
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue
+
+        if failed_clients:
+            logger.warning(
+                "Round %d: %d/%d clients failed; aggregating over %d successful clients.",
+                round_num + 1, len(failed_clients), len(hospitals), len(client_updates),
+            )
 
         # Record each client's training loss in the adaptive DP mechanism so
         # it can weight the ε allocation for the next round.
@@ -375,11 +406,18 @@ def run_simulation(
     logger.info("=" * 60)
     logger.info("FINAL EVALUATION")
 
-    eval_questions = [
-        "A 55-year-old woman presents with sudden onset of left-sided weakness and slurred speech. CT shows no hemorrhage. What is the next step?",
-        "A 30-year-old man presents with high fever, neck stiffness, and photophobia for 2 days. What is the most likely diagnosis?",
-        "A 65-year-old diabetic patient presents with crushing chest pain. Troponin is elevated. What is the most appropriate management?",
+    # Use caller-supplied eval questions from EvalConfig, or fall back to a
+    # built-in set that covers the three most common specialties in the default
+    # hospital registry.
+    _DEFAULT_EVAL_QUESTIONS: List[str] = [
+        "A 55-year-old woman presents with sudden onset of left-sided weakness and "
+        "slurred speech. CT shows no hemorrhage. What is the next step?",
+        "A 30-year-old man presents with high fever, neck stiffness, and photophobia "
+        "for 2 days. What is the most likely diagnosis?",
+        "A 65-year-old diabetic patient presents with crushing chest pain. Troponin is "
+        "elevated. What is the most appropriate management?",
     ]
+    eval_questions = cfg.eval.eval_questions or _DEFAULT_EVAL_QUESTIONS
 
     server.save_global_model(tokenizer, cfg.fl_rounds - 1, cfg.global_model_dir)
     eval_results = server.evaluate_global(tokenizer, eval_questions)

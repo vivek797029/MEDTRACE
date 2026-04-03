@@ -7,6 +7,7 @@ Override values via FLConfig.create() — never mutate after creation.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -35,6 +36,182 @@ class HospitalConfig:
             raise ValueError(f"num_samples must be positive, got {self.num_samples}")
         if not 0.0 <= self.specialty_ratio <= 1.0:
             raise ValueError(f"specialty_ratio must be 0-1, got {self.specialty_ratio}")
+
+
+class HospitalRegistry:
+    """
+    Factory for ``HospitalConfig`` objects covering common medical specialties.
+
+    Provides a catalogue of named hospital templates and a ``build`` factory
+    for generating arbitrary numbers of clients for scalability testing.
+
+    Example::
+
+        # Use 5 predefined specialty hospitals
+        hospitals = HospitalRegistry.build(5)
+        cfg = FLConfig(hospitals=hospitals)
+
+        # Use all 10 templates
+        hospitals = HospitalRegistry.build_all()
+
+        # Single custom hospital
+        h = HospitalRegistry.get("cardiology")
+    """
+
+    _TEMPLATES: Dict[str, HospitalConfig] = {
+        "cardiology": HospitalConfig(
+            name="Metro General (Cardiology)",
+            location="New York, USA",
+            specialty_keywords=[
+                "heart", "cardiac", "coronary", "chest pain",
+                "myocardial", "arrhythmia", "angina", "aortic",
+            ],
+            num_samples=1500,
+        ),
+        "neurology": HospitalConfig(
+            name="Royal London (Neurology)",
+            location="London, UK",
+            specialty_keywords=[
+                "brain", "neuro", "seizure", "headache",
+                "stroke", "cognitive", "dementia", "nerve",
+            ],
+            num_samples=1200,
+        ),
+        "infectious": HospitalConfig(
+            name="AIIMS Delhi (Infectious Disease)",
+            location="New Delhi, India",
+            specialty_keywords=[
+                "infection", "fever", "bacteria", "virus",
+                "antibiotic", "sepsis", "tuberculosis", "malaria",
+            ],
+            num_samples=1300,
+        ),
+        "oncology": HospitalConfig(
+            name="MD Anderson (Oncology)",
+            location="Houston, USA",
+            specialty_keywords=[
+                "cancer", "tumor", "chemotherapy", "radiation",
+                "malignant", "biopsy", "metastasis", "oncology",
+            ],
+            num_samples=1400,
+        ),
+        "pediatrics": HospitalConfig(
+            name="Great Ormond Street (Pediatrics)",
+            location="London, UK",
+            specialty_keywords=[
+                "child", "pediatric", "infant", "neonatal",
+                "congenital", "developmental", "adolescent", "juvenile",
+            ],
+            num_samples=1100,
+        ),
+        "emergency": HospitalConfig(
+            name="Johns Hopkins (Emergency Medicine)",
+            location="Baltimore, USA",
+            specialty_keywords=[
+                "trauma", "emergency", "acute", "critical",
+                "resuscitation", "shock", "hemorrhage", "triage",
+            ],
+            num_samples=1500,
+        ),
+        "pulmonology": HospitalConfig(
+            name="Mayo Clinic (Pulmonology)",
+            location="Rochester, USA",
+            specialty_keywords=[
+                "lung", "respiratory", "asthma", "copd",
+                "pneumonia", "pulmonary", "bronchial", "spirometry",
+            ],
+            num_samples=1200,
+        ),
+        "endocrinology": HospitalConfig(
+            name="Charité (Endocrinology)",
+            location="Berlin, Germany",
+            specialty_keywords=[
+                "diabetes", "thyroid", "hormone", "insulin",
+                "endocrine", "adrenal", "pituitary", "metabolic",
+            ],
+            num_samples=1300,
+        ),
+        "gastroenterology": HospitalConfig(
+            name="Cleveland Clinic (Gastroenterology)",
+            location="Cleveland, USA",
+            specialty_keywords=[
+                "liver", "gastrointestinal", "bowel", "colon",
+                "hepatic", "pancreatic", "gastric", "digestive",
+            ],
+            num_samples=1200,
+        ),
+        "nephrology": HospitalConfig(
+            name="Singapore General (Nephrology)",
+            location="Singapore",
+            specialty_keywords=[
+                "kidney", "renal", "dialysis", "glomerular",
+                "urinary", "creatinine", "electrolyte", "nephron",
+            ],
+            num_samples=1100,
+        ),
+    }
+
+    @classmethod
+    def get(cls, specialty: str) -> HospitalConfig:
+        """Return a named hospital template.  Raises ``KeyError`` if unknown."""
+        if specialty not in cls._TEMPLATES:
+            available = ", ".join(sorted(cls._TEMPLATES))
+            raise KeyError(
+                f"Unknown specialty {specialty!r}. Available: {available}"
+            )
+        return cls._TEMPLATES[specialty]
+
+    @classmethod
+    def build(
+        cls,
+        n: int,
+        num_samples: int = 1500,
+        specialty_ratio: float = 0.6,
+    ) -> Dict[str, "HospitalConfig"]:
+        """
+        Return a dict of ``n`` hospital configs drawn from the template catalogue.
+
+        If ``n`` exceeds the number of templates (10), the catalogue wraps around
+        with ``_v2``, ``_v3``, … suffixes to keep IDs unique.
+
+        Args:
+            n: Number of hospital clients to create.
+            num_samples: Override the per-hospital sample size for all generated
+                hospitals (useful for quick scaling tests).
+            specialty_ratio: Override specialty data fraction.
+
+        Returns:
+            ``{"hospital_0": HospitalConfig, "hospital_1": ..., ...}``
+        """
+        if n <= 0:
+            raise ValueError(f"n must be positive, got {n}")
+
+        templates = list(cls._TEMPLATES.items())
+        hospitals: Dict[str, HospitalConfig] = {}
+        for i in range(n):
+            template_key, template = templates[i % len(templates)]
+            suffix = "" if i < len(templates) else f"_v{i // len(templates) + 1}"
+            hospital_id = f"hospital_{i:02d}"
+            hospitals[hospital_id] = dataclasses.replace(
+                template,
+                num_samples=num_samples,
+                specialty_ratio=specialty_ratio,
+                name=f"{template.name}{suffix}",
+            )
+        return hospitals
+
+    @classmethod
+    def build_all(cls) -> Dict[str, "HospitalConfig"]:
+        """Return all 10 specialty templates as a hospital dict."""
+        return {
+            f"hospital_{i:02d}": h
+            for i, h in enumerate(cls._TEMPLATES.values())
+        }
+
+    @classmethod
+    def specialties(cls) -> List[str]:
+        """Return the list of available specialty names."""
+        return list(cls._TEMPLATES.keys())
 
 
 @dataclass(frozen=True)
@@ -125,6 +302,11 @@ class EvalConfig:
     save_plots: bool = True
     plot_format: str = "png"            # "png" | "pdf" | "svg"
     plot_dpi: int = 150
+
+    # Quick qualitative evaluation questions (used by the simulator's final
+    # generation step).  None → simulator falls back to built-in defaults.
+    # Provide a list of strings to match your hospital specialties at scale.
+    eval_questions: Optional[List[str]] = None
 
     def __post_init__(self):
         if self.eval_every_n_rounds < 1:
@@ -245,30 +427,10 @@ class FLConfig:
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
 
-    # Hospitals
-    hospitals: Dict[str, HospitalConfig] = field(default_factory=lambda: {
-        "hospital_A": HospitalConfig(
-            name="Metro General (Cardiology)",
-            location="New York, USA",
-            specialty_keywords=["heart", "cardiac", "coronary", "chest pain",
-                                "myocardial", "arrhythmia", "angina", "aortic"],
-            num_samples=1500,
-        ),
-        "hospital_B": HospitalConfig(
-            name="Royal London (Neurology)",
-            location="London, UK",
-            specialty_keywords=["brain", "neuro", "seizure", "headache",
-                                "stroke", "cognitive", "dementia", "nerve"],
-            num_samples=1200,
-        ),
-        "hospital_C": HospitalConfig(
-            name="AIIMS Delhi (Infectious)",
-            location="New Delhi, India",
-            specialty_keywords=["infection", "fever", "bacteria", "virus",
-                                "antibiotic", "sepsis", "tuberculosis", "malaria"],
-            num_samples=1300,
-        ),
-    })
+    # Hospitals — use HospitalRegistry.build(n) to scale to any number of clients
+    hospitals: Dict[str, HospitalConfig] = field(
+        default_factory=lambda: HospitalRegistry.build(3)
+    )
 
     # Paths
     output_dir: str = "outputs/federated"
@@ -299,20 +461,59 @@ class FLConfig:
 
     @classmethod
     def create(cls, **overrides) -> "FLConfig":
-        """Create config with overrides. Sub-configs can be passed as objects."""
+        """Create a fresh config with field overrides. Sub-configs can be objects."""
         return cls(**overrides)
+
+    def replace(self, **overrides) -> "FLConfig":
+        """
+        Return a new ``FLConfig`` with selected fields replaced.
+
+        Unlike ``FLConfig.create(**overrides)``, this starts from *this* config
+        and carries over all un-overridden fields — useful for creating variants
+        without manually repeating every field.
+
+        Example::
+
+            base = FLConfig(fl_rounds=10, dp=DPConfig(epsilon=8.0))
+            no_dp = base.replace(dp=DPConfig(enabled=False))
+            more_rounds = base.replace(fl_rounds=20)
+        """
+        return dataclasses.replace(self, **overrides)
 
     @classmethod
     def quick_demo(cls) -> "FLConfig":
-        """Minimal config for fast testing — 2 rounds, 100 samples."""
-        small_hospitals = {
-            hid: HospitalConfig(
-                name=h.name, location=h.location,
-                specialty_keywords=h.specialty_keywords, num_samples=100,
-            )
-            for hid, h in cls().hospitals.items()
-        }
-        return cls(fl_rounds=2, hospitals=small_hospitals)
+        """Minimal config for fast testing — 2 rounds, 100 samples per hospital."""
+        return cls(
+            fl_rounds=2,
+            hospitals=HospitalRegistry.build(3, num_samples=100),
+        )
+
+    @classmethod
+    def with_n_hospitals(
+        cls,
+        n: int,
+        num_samples: int = 1500,
+        specialty_ratio: float = 0.6,
+        **overrides,
+    ) -> "FLConfig":
+        """
+        Create a config with exactly ``n`` hospital clients.
+
+        Hospitals are drawn from ``HospitalRegistry.build(n)`` — the first 10
+        are distinct specialties; beyond that the catalogue wraps with version
+        suffixes.  Useful for scaling experiments.
+
+        Example::
+
+            cfg_10  = FLConfig.with_n_hospitals(10)
+            cfg_100 = FLConfig.with_n_hospitals(100, num_samples=500, fl_rounds=5)
+        """
+        return cls(
+            hospitals=HospitalRegistry.build(
+                n, num_samples=num_samples, specialty_ratio=specialty_ratio
+            ),
+            **overrides,
+        )
 
     def to_dict(self) -> dict:
         """Serialize config to dict for metadata/logging."""
@@ -338,7 +539,10 @@ class FLConfig:
             "eval": {"enabled": self.eval.enabled,
                      "num_eval_samples": self.eval.num_eval_samples,
                      "eval_seed": self.eval.eval_seed,
-                     "eval_every_n_rounds": self.eval.eval_every_n_rounds},
+                     "eval_every_n_rounds": self.eval.eval_every_n_rounds,
+                     "num_eval_questions": len(self.eval.eval_questions)
+                     if self.eval.eval_questions else "default"},
+            "hospitals": {hid: h.name for hid, h in self.hospitals.items()},
         }
 
 

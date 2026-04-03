@@ -56,7 +56,7 @@ from typing import Dict, List, Optional
 # Allow running from src/ directly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fl_config import DPConfig, EvalConfig, FLConfig, TrackerConfig
+from fl_config import DPConfig, EvalConfig, FLConfig, HospitalRegistry, TrackerConfig
 from fl_evaluator import EvalAccumulator, RoundEvaluator, set_all_seeds
 from fl_plots import ResultsPlotter
 from fl_simulate import run_simulation, setup_logging
@@ -76,45 +76,31 @@ def build_experiment_configs(
     The no-DP baseline always comes first so plots render it as the reference
     line.  Additional epsilon values are appended in ascending order (more
     private → right side of privacy-performance plot).
+
+    Uses ``FLConfig.replace()`` (backed by ``dataclasses.replace``) to carry
+    all fields from ``base_cfg`` automatically — new fields added to ``FLConfig``
+    are propagated without any changes here.
     """
     if epsilons is None:
         epsilons = [base_cfg.dp.epsilon]
 
     configs: Dict[str, FLConfig] = {}
 
-    # Baseline: same config but DP disabled
-    configs["No-DP Baseline"] = FLConfig.create(
-        base_model=base_cfg.base_model,
-        fl_rounds=base_cfg.fl_rounds,
-        local_epochs=base_cfg.local_epochs,
-        hospitals=base_cfg.hospitals,
-        lora=base_cfg.lora,
-        training=base_cfg.training,
-        tracker=base_cfg.tracker,
-        eval=base_cfg.eval,
-        dp=DPConfig(enabled=False),
-    )
+    # Baseline: inherit all fields from base_cfg, only override dp
+    configs["No-DP Baseline"] = base_cfg.replace(dp=DPConfig(enabled=False))
 
-    # DP variants — one per epsilon
+    # DP variants — one per epsilon value
     for eps in sorted(epsilons):
         if eps == float("inf") or eps <= 0:
             continue
         label = f"FedAvg + DP (ε={eps:.1f})"
-        configs[label] = FLConfig.create(
-            base_model=base_cfg.base_model,
-            fl_rounds=base_cfg.fl_rounds,
-            local_epochs=base_cfg.local_epochs,
-            hospitals=base_cfg.hospitals,
-            lora=base_cfg.lora,
-            training=base_cfg.training,
-            tracker=base_cfg.tracker,
-            eval=base_cfg.eval,
+        configs[label] = base_cfg.replace(
             dp=DPConfig(
                 enabled=True,
                 epsilon=eps,
                 delta=base_cfg.dp.delta,
                 max_grad_norm=base_cfg.dp.max_grad_norm,
-            ),
+            )
         )
 
     return configs
@@ -356,6 +342,12 @@ def main() -> None:
         help="Run only the no-DP baseline (skip DP variants)",
     )
     parser.add_argument(
+        "--num-hospitals", type=int, default=None, metavar="N",
+        help="Number of federated hospital clients (default: 3).\n"
+             "Uses HospitalRegistry to auto-generate N specialty hospitals.\n"
+             f"Available specialties: {', '.join(HospitalRegistry.specialties())}",
+    )
+    parser.add_argument(
         "--verbose", action="store_true",
         help="Enable DEBUG logging",
     )
@@ -387,12 +379,17 @@ def main() -> None:
         plot_format=args.plot_format,
     )
 
+    # Determine hospital fleet size
+    n_hospitals = args.num_hospitals  # None → use FLConfig default (3)
+
     if args.quick:
         base_cfg = FLConfig.quick_demo()
+        if n_hospitals is not None:
+            base_cfg = base_cfg.replace(
+                hospitals=HospitalRegistry.build(n_hospitals, num_samples=100)
+            )
         # Override eval config on the quick demo
-        base_cfg = FLConfig.create(
-            fl_rounds=base_cfg.fl_rounds,
-            hospitals=base_cfg.hospitals,
+        base_cfg = base_cfg.replace(
             eval=EvalConfig(
                 num_eval_samples=min(args.eval_samples, 50),
                 eval_seed=args.seed,
@@ -401,13 +398,25 @@ def main() -> None:
                 plot_format=args.plot_format,
             ),
         )
-        logger.info("Quick mode: 2 rounds, 100 samples/hospital, 50 eval questions")
+        logger.info(
+            "Quick mode: 2 rounds, 100 samples/hospital (%d hospitals), 50 eval questions",
+            len(base_cfg.hospitals),
+        )
     elif args.rounds:
-        base_cfg = FLConfig.create(fl_rounds=args.rounds, eval=eval_cfg)
-        logger.info("Custom: %d rounds", args.rounds)
+        overrides = {"fl_rounds": args.rounds, "eval": eval_cfg}
+        if n_hospitals is not None:
+            overrides["hospitals"] = HospitalRegistry.build(n_hospitals)
+        base_cfg = FLConfig.create(**overrides)
+        logger.info("Custom: %d rounds, %d hospitals", args.rounds, len(base_cfg.hospitals))
     else:
-        base_cfg = FLConfig.create(eval=eval_cfg)
-        logger.info("Full run: %d rounds", base_cfg.fl_rounds)
+        overrides = {"eval": eval_cfg}
+        if n_hospitals is not None:
+            overrides["hospitals"] = HospitalRegistry.build(n_hospitals)
+        base_cfg = FLConfig.create(**overrides)
+        logger.info(
+            "Full run: %d rounds, %d hospitals",
+            base_cfg.fl_rounds, len(base_cfg.hospitals),
+        )
 
     # ── Build experiment matrix ─────────────────────────────────────────────
     all_configs = build_experiment_configs(base_cfg, epsilons=args.epsilons)

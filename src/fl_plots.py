@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fl_evaluator import EvalAccumulator, EvalResult
@@ -44,15 +44,62 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ─── Colour Palette ───────────────────────────────────────────────────────────
-# Accessible, print-friendly colours.
-_PALETTE = [
-    "#2196F3",   # blue      — FedAvg+DP (current system)
-    "#F44336",   # red       — No-DP baseline
-    "#4CAF50",   # green     — optional third variant
-    "#FF9800",   # orange    — optional fourth
-    "#9C27B0",   # purple    — optional fifth
+# Base palette for ≤ 5 series.  Beyond this, _get_palette() generates colours
+# from matplotlib colormaps so the system works with any number of hospitals
+# or experiment conditions.
+_BASE_PALETTE = [
+    "#2196F3",   # blue
+    "#F44336",   # red
+    "#4CAF50",   # green
+    "#FF9800",   # orange
+    "#9C27B0",   # purple
 ]
-_MARKERS = ["o", "s", "^", "D", "v"]
+_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*", "h", "8"]
+
+
+def _get_palette(n: int) -> List[str]:
+    """
+    Return a list of ``n`` hex colour strings.
+
+    For n ≤ 5 the curated ``_BASE_PALETTE`` is used (best readability).
+    For 6–10 the matplotlib ``tab10`` colormap is used.
+    For > 10 ``tab20`` is used, cycling if necessary.
+    """
+    if n <= len(_BASE_PALETTE):
+        return _BASE_PALETTE[:n]
+
+    try:
+        import matplotlib.pyplot as plt
+        cmap_name = "tab10" if n <= 10 else "tab20"
+        cmap = plt.get_cmap(cmap_name)
+        return [
+            "#{:02x}{:02x}{:02x}".format(
+                int(cmap(i % cmap.N)[0] * 255),
+                int(cmap(i % cmap.N)[1] * 255),
+                int(cmap(i % cmap.N)[2] * 255),
+            )
+            for i in range(n)
+        ]
+    except Exception:
+        # Fallback: cycle base palette
+        return [_BASE_PALETTE[i % len(_BASE_PALETTE)] for i in range(n)]
+
+
+def _get_markers(n: int) -> List[str]:
+    """Return n marker strings, cycling through _MARKERS."""
+    return [_MARKERS[i % len(_MARKERS)] for i in range(n)]
+
+
+def _line_figsize(n_series: int) -> Tuple[float, float]:
+    """Sensible figure width for line charts: wider when there are many series."""
+    w = max(8.0, min(14.0, 6.0 + n_series * 0.5))
+    return (w, 5.0)
+
+
+def _bar_figsize(n_labels: int) -> Tuple[float, float]:
+    """Sensible figure width for bar charts: grows with the number of groups."""
+    w = max(6.0, min(20.0, n_labels * 2.5))
+    return (w, 5.0)
 
 
 # ─── Plotter ──────────────────────────────────────────────────────────────────
@@ -114,7 +161,10 @@ class ResultsPlotter:
     ) -> str:
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        n = len(eval_data)
+        palette = _get_palette(n)
+        markers = _get_markers(n)
+        fig, ax = plt.subplots(figsize=_line_figsize(n))
         self._apply_style(ax)
 
         for i, (label, results) in enumerate(eval_data.items()):
@@ -122,9 +172,7 @@ class ResultsPlotter:
                 continue
             rounds = [r.round_num + 1 for r in results]
             losses = [r.loss for r in results]
-            color  = _PALETTE[i % len(_PALETTE)]
-            marker = _MARKERS[i % len(_MARKERS)]
-            ax.plot(rounds, losses, color=color, marker=marker,
+            ax.plot(rounds, losses, color=palette[i], marker=markers[i],
                     linewidth=2, markersize=5, label=label)
 
         ax.set_xlabel("FL Round", fontsize=12)
@@ -147,7 +195,10 @@ class ResultsPlotter:
     ) -> str:
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        n = len(eval_data)
+        palette = _get_palette(n)
+        markers = _get_markers(n)
+        fig, ax = plt.subplots(figsize=_line_figsize(n))
         self._apply_style(ax)
 
         for i, (label, results) in enumerate(eval_data.items()):
@@ -155,9 +206,7 @@ class ResultsPlotter:
                 continue
             rounds = [r.round_num + 1 for r in results]
             accs   = [r.accuracy * 100 for r in results]   # as %
-            color  = _PALETTE[i % len(_PALETTE)]
-            marker = _MARKERS[i % len(_MARKERS)]
-            ax.plot(rounds, accs, color=color, marker=marker,
+            ax.plot(rounds, accs, color=palette[i], marker=markers[i],
                     linewidth=2, markersize=5, label=label)
 
         ax.set_xlabel("FL Round", fontsize=12)
@@ -165,16 +214,17 @@ class ResultsPlotter:
         ax.set_title(title, fontsize=14, fontweight="bold")
         ax.legend(fontsize=10, framealpha=0.9)
         ax.set_ylim(0, 100)
-        # Annotate final values
-        for i, (label, results) in enumerate(eval_data.items()):
-            if results:
-                r = results[-1]
-                ax.annotate(
-                    f"{r.accuracy * 100:.1f}%",
-                    xy=(r.round_num + 1, r.accuracy * 100),
-                    xytext=(4, 4), textcoords="offset points",
-                    fontsize=9, color=_PALETTE[i % len(_PALETTE)],
-                )
+        # Annotate final values (skip when many series to avoid clutter)
+        if n <= 8:
+            for i, (label, results) in enumerate(eval_data.items()):
+                if results:
+                    r = results[-1]
+                    ax.annotate(
+                        f"{r.accuracy * 100:.1f}%",
+                        xy=(r.round_num + 1, r.accuracy * 100),
+                        xytext=(4, 4), textcoords="offset points",
+                        fontsize=9, color=palette[i],
+                    )
         fig.tight_layout()
 
         path = self._save(fig, "accuracy_vs_rounds")
@@ -197,7 +247,10 @@ class ResultsPlotter:
         """
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        n = len(eval_data)
+        palette = _get_palette(n)
+        markers = _get_markers(n)
+        fig, ax = plt.subplots(figsize=_line_figsize(n))
         self._apply_style(ax)
 
         has_data = False
@@ -206,18 +259,18 @@ class ResultsPlotter:
                 continue
             budgets = [r.privacy_budget_spent for r in results]
             accs    = [r.accuracy * 100 for r in results]
-            color   = _PALETTE[i % len(_PALETTE)]
-            marker  = _MARKERS[i % len(_MARKERS)]
+            color   = palette[i]
+            marker  = markers[i]
 
             # Plot trajectory line
             ax.plot(budgets, accs, color=color, linewidth=1.5,
                     linestyle="--", alpha=0.6)
             # Plot individual round markers
-            sc = ax.scatter(budgets, accs, c=color, marker=marker,
-                            s=60, label=label, zorder=3)
+            ax.scatter(budgets, accs, c=color, marker=marker,
+                       s=60, label=label, zorder=3)
 
-            # Annotate first and last points with round number
-            if results:
+            # Annotate first and last points (skip when many series)
+            if results and n <= 8:
                 for idx in [0, len(results) - 1]:
                     r = results[idx]
                     ax.annotate(
@@ -261,19 +314,19 @@ class ResultsPlotter:
     ) -> str:
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        n = len(client_data)
+        palette = _get_palette(n)
+        markers = _get_markers(n)
+        fig, ax = plt.subplots(figsize=_line_figsize(n))
         self._apply_style(ax)
 
         for i, (hospital_id, metrics) in enumerate(client_data.items()):
             if not metrics:
                 continue
-            # Each metrics dict has "round" and "train_loss"
             rounds = [m.get("round", j) + 1 for j, m in enumerate(metrics)]
             losses = [m.get("train_loss", 0.0) for m in metrics]
             name   = metrics[0].get("hospital", hospital_id)
-            color  = _PALETTE[i % len(_PALETTE)]
-            marker = _MARKERS[i % len(_MARKERS)]
-            ax.plot(rounds, losses, color=color, marker=marker,
+            ax.plot(rounds, losses, color=palette[i], marker=markers[i],
                     linewidth=2, markersize=5, label=name)
 
         ax.set_xlabel("FL Round", fontsize=12)
@@ -356,7 +409,7 @@ class ResultsPlotter:
         x  = np.arange(len(labels))
         w  = 0.35
 
-        fig, ax1 = plt.subplots(figsize=(max(6, len(labels) * 2.5), 5))
+        fig, ax1 = plt.subplots(figsize=_bar_figsize(len(labels)))
         self._apply_style(ax1)
         ax2 = ax1.twinx()
 
