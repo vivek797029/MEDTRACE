@@ -24,9 +24,21 @@ import sys
 import time
 from typing import List, Optional
 
-import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+try:
+    import torch
+except ImportError:  # pragma: no cover — GPU path only
+    torch = None  # type: ignore[assignment]
+
+try:
+    from datasets import load_dataset
+except ImportError:  # pragma: no cover — GPU path only
+    load_dataset = None  # type: ignore[assignment]
+
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except ImportError:  # pragma: no cover — GPU path only
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
 
 # Add src to path for standalone execution
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

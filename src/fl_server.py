@@ -14,9 +14,22 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
-from peft import LoraConfig, get_peft_model
-from transformers import AutoModelForCausalLM, AutoTokenizer
+try:
+    import torch
+except ImportError:  # pragma: no cover — GPU path only
+    torch = None  # type: ignore[assignment]
+
+try:
+    from peft import LoraConfig, get_peft_model
+except ImportError:  # pragma: no cover — GPU path only
+    LoraConfig = None  # type: ignore[assignment]
+    get_peft_model = None  # type: ignore[assignment]
+
+try:
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+except ImportError:  # pragma: no cover — GPU path only
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
 
 from fl_config import (
     AggregationError, FLConfig, Metrics, WeightDict, config as default_config,

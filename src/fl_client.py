@@ -16,16 +16,37 @@ from collections import OrderedDict
 from typing import List, Optional, Tuple
 
 import numpy as np
-import torch
-from datasets import Dataset
-from peft import LoraConfig, get_peft_model
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    DataCollatorForLanguageModeling,
-    Trainer,
-    TrainingArguments,
-)
+
+try:
+    import torch
+except ImportError:  # pragma: no cover — GPU path only
+    torch = None  # type: ignore[assignment]
+
+try:
+    from datasets import Dataset
+except ImportError:  # pragma: no cover — GPU path only
+    Dataset = None  # type: ignore[assignment]
+
+try:
+    from peft import LoraConfig, get_peft_model
+except ImportError:  # pragma: no cover — GPU path only
+    LoraConfig = None  # type: ignore[assignment]
+    get_peft_model = None  # type: ignore[assignment]
+
+try:
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        DataCollatorForLanguageModeling,
+        Trainer,
+        TrainingArguments,
+    )
+except ImportError:  # pragma: no cover — GPU path only
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
+    DataCollatorForLanguageModeling = None  # type: ignore[assignment]
+    Trainer = None  # type: ignore[assignment]
+    TrainingArguments = None  # type: ignore[assignment]
 
 from fl_config import FLConfig, HospitalConfig, Metrics, WeightDict, config as default_config
 from fl_tracker import ExperimentTracker, NoOpTracker
