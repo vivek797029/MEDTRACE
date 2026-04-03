@@ -36,6 +36,10 @@ from fl_config import FLConfig
 from fl_server import FederatedServer
 from fl_tracker import ExperimentTracker, create_tracker
 
+# Adaptive DP — optional; imported here so simulate.py works even if the
+# feature is disabled (AdaptiveDPMechanism is only instantiated when needed).
+from fl_adaptive_dp import AdaptiveDPMechanism
+
 logger = logging.getLogger(__name__)
 
 
@@ -232,6 +236,26 @@ def run_simulation(
     os.makedirs(cfg.hospital_models_dir, exist_ok=True)
     os.makedirs(cfg.metrics_dir, exist_ok=True)
 
+    # ─── Adaptive DP Setup ────────────────────────────────────
+    # Instantiate once before the training loop so the per-client EMA state
+    # and budget accounting persist across all rounds.
+    adaptive_dp: Optional[AdaptiveDPMechanism] = None
+    if cfg.dp.enabled and cfg.adaptive_dp.enabled:
+        adaptive_dp = AdaptiveDPMechanism(
+            hospital_ids=list(hospitals.keys()),
+            global_epsilon=cfg.dp.epsilon,
+            delta=cfg.dp.delta,
+            fl_rounds=cfg.fl_rounds,
+            initial_sensitivity=cfg.dp.max_grad_norm,
+            ema_alpha=cfg.adaptive_dp.ema_alpha,
+            min_epsilon_fraction=cfg.adaptive_dp.min_epsilon_fraction,
+        )
+        logger.info(
+            "Adaptive DP enabled — per-client noise calibration active "
+            "(ε=%.1f, α=%.2f, floor=%.2f)",
+            cfg.dp.epsilon, cfg.adaptive_dp.ema_alpha, cfg.adaptive_dp.min_epsilon_fraction,
+        )
+
     # ─── Training Loop ────────────────────────────────────────
     total_start = time.time()
     all_round_metrics = []
@@ -252,14 +276,40 @@ def run_simulation(
         )
         shared_base.eval()
 
+        # Compute per-client ε allocations BEFORE training so each client
+        # knows its noise level.  On round 0 all clients start with the same
+        # allocation (no loss history yet); from round 1 onwards the mechanism
+        # uses each hospital's previous loss to redistribute the budget.
+        round_allocations: dict = {}
+        if adaptive_dp is not None:
+            round_allocations = adaptive_dp.compute_epsilon_allocation(round_num)
+            # Log adaptive DP allocation metrics to tracker
+            tracker.log(
+                adaptive_dp.allocation_log_dict(round_allocations, round_num),
+                step=round_num,
+            )
+            logger.info(
+                "Round %d adaptive ε allocation: %s",
+                round_num + 1,
+                {hid: f"{eps:.4f}" for hid, eps in round_allocations.items()},
+            )
+
         client_updates = {}
         for hid, client in hospitals.items():
             w, m = client.train_local(
                 global_weights, tokenizer, round_num,
                 cfg.hospital_models_dir, base_model=shared_base,
                 tracker=tracker,
+                adaptive_dp_mechanism=adaptive_dp,
+                round_epsilon=round_allocations.get(hid),
             )
             client_updates[hid] = (w, m)
+
+        # Record each client's training loss in the adaptive DP mechanism so
+        # it can weight the ε allocation for the next round.
+        if adaptive_dp is not None:
+            for hid, (_, metrics_dict) in client_updates.items():
+                adaptive_dp.record_loss(hid, metrics_dict.get("train_loss", float("inf")))
 
         del shared_base
         if torch.cuda.is_available():
@@ -339,6 +389,8 @@ def run_simulation(
     report["total_training_time"] = round(total_elapsed, 2)
     report["eval_results"] = eval_results
     report["all_round_metrics"] = all_round_metrics
+    if adaptive_dp is not None:
+        report["adaptive_dp_summary"] = adaptive_dp.summary()
 
     report_path = os.path.join(cfg.metrics_dir, "fl_training_report.json")
     with open(report_path, "w") as f:

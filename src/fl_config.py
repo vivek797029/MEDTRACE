@@ -136,6 +136,51 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class AdaptiveDPConfig:
+    """
+    Configuration for adaptive per-client differential privacy.
+
+    When ``enabled=True`` (and ``DPConfig.enabled=True``), each hospital
+    receives a dynamically calibrated noise level every round instead of the
+    fixed global sigma from ``DPConfig.sigma``.  The mechanism adapts two
+    independent axes:
+
+    1. **Clipping norm** — per-client EMA of observed gradient norms replaces
+       the fixed ``DPConfig.max_grad_norm``.  Hospitals with tightly-clustered
+       updates get tighter clipping and therefore less noise.
+
+    2. **Epsilon allocation** — the global budget is redistributed each round
+       in proportion to inverse training loss (softmax).  Hospitals that have
+       already converged receive a larger ε slice (less noise, more useful
+       updates); hospitals still learning rapidly receive a smaller slice.
+
+    Attributes
+    ----------
+    enabled:
+        Activate adaptive DP.  Requires ``DPConfig.enabled=True``.
+    ema_alpha:
+        EMA smoothing factor α ∈ (0, 1] for sensitivity estimation.
+        Smaller values prioritise historical norms; larger values react
+        quickly to current gradients.  Default 0.1 is a stable starting point.
+    min_epsilon_fraction:
+        Floor on each client's ε weight before softmax normalisation.
+        A value of 0.1 ensures every client gets ≥ 10 % of the mean
+        per-round budget, preventing starvation of high-loss hospitals.
+    """
+    enabled: bool = False
+    ema_alpha: float = 0.1
+    min_epsilon_fraction: float = 0.1
+
+    def __post_init__(self):
+        if not 0.0 < self.ema_alpha <= 1.0:
+            raise ValueError(f"ema_alpha must be in (0, 1], got {self.ema_alpha}")
+        if not 0.0 < self.min_epsilon_fraction <= 1.0:
+            raise ValueError(
+                f"min_epsilon_fraction must be in (0, 1], got {self.min_epsilon_fraction}"
+            )
+
+
+@dataclass(frozen=True)
 class TrackerConfig:
     """
     Experiment tracking configuration.
@@ -195,6 +240,7 @@ class FLConfig:
     # Sub-configs
     lora: LoRAConfig = field(default_factory=LoRAConfig)
     dp: DPConfig = field(default_factory=DPConfig)
+    adaptive_dp: AdaptiveDPConfig = field(default_factory=AdaptiveDPConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -281,6 +327,9 @@ class FLConfig:
                      "target_modules": list(self.lora.target_modules)},
             "dp": {"enabled": self.dp.enabled, "epsilon": self.dp.epsilon,
                    "delta": self.dp.delta, "max_grad_norm": self.dp.max_grad_norm},
+            "adaptive_dp": {"enabled": self.adaptive_dp.enabled,
+                            "ema_alpha": self.adaptive_dp.ema_alpha,
+                            "min_epsilon_fraction": self.adaptive_dp.min_epsilon_fraction},
             "training": {"lr": self.training.learning_rate,
                          "batch_size": self.training.batch_size,
                          "max_length": self.training.max_length},

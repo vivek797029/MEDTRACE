@@ -29,6 +29,12 @@ from transformers import (
 from fl_config import FLConfig, HospitalConfig, Metrics, WeightDict, config as default_config
 from fl_tracker import ExperimentTracker, NoOpTracker
 
+# Imported lazily inside methods to avoid requiring fl_adaptive_dp at import time
+# when the feature is disabled.  The type hint below is for IDE support only.
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from fl_adaptive_dp import AdaptiveDPMechanism
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,6 +117,8 @@ class HospitalClient:
         output_dir: str,
         base_model: Optional[AutoModelForCausalLM] = None,
         tracker: Optional[ExperimentTracker] = None,
+        adaptive_dp_mechanism: Optional["AdaptiveDPMechanism"] = None,
+        round_epsilon: Optional[float] = None,
     ) -> Tuple[WeightDict, Metrics]:
         """
         Train LoRA adapter on local hospital data.
@@ -125,6 +133,14 @@ class HospitalClient:
                         deep-copied (caller retains ownership). If None, loads fresh.
             tracker: experiment tracker for logging per-client metrics.
                      Defaults to NoOpTracker (no logging).
+            adaptive_dp_mechanism: optional AdaptiveDPMechanism instance.  When
+                provided (and cfg.adaptive_dp.enabled), replaces the fixed
+                Gaussian mechanism with per-client adaptive noise.  The
+                mechanism is owned by the simulation orchestrator and shared
+                across all hospital clients.
+            round_epsilon: pre-computed ε allocation for this client this round,
+                as returned by AdaptiveDPMechanism.compute_epsilon_allocation().
+                Required when adaptive_dp_mechanism is not None.
         """
         _tracker = tracker if tracker is not None else NoOpTracker()
         if self.local_data is None:
@@ -210,8 +226,22 @@ class HospitalClient:
         # Extract LoRA weights
         lora_weights = self._extract_lora_weights(model)
 
-        # Apply DP noise
-        if self.cfg.dp.enabled:
+        # Apply DP noise — adaptive per-client or standard global mechanism
+        use_adaptive = (
+            self.cfg.dp.enabled
+            and self.cfg.adaptive_dp.enabled
+            and adaptive_dp_mechanism is not None
+            and round_epsilon is not None
+        )
+        if use_adaptive:
+            lora_weights = adaptive_dp_mechanism.apply_noise(
+                self.hospital_id, lora_weights, round_num, round_epsilon,
+            )
+            # Sync privacy_budget_spent from the mechanism's authoritative accounting
+            self.privacy_budget_spent = adaptive_dp_mechanism.get_budget_spent(
+                self.hospital_id
+            )
+        elif self.cfg.dp.enabled:
             lora_weights = self._apply_dp_noise(lora_weights)
 
         # Metrics
@@ -227,6 +257,7 @@ class HospitalClient:
             "training_time_seconds": round(elapsed, 2),
             "lora_params_shared": sum(p.numel() for p in lora_weights.values()),
             "privacy_budget_spent": self.privacy_budget_spent,
+            "dp_mode": "adaptive" if use_adaptive else ("standard" if self.cfg.dp.enabled else "none"),
         }
         self.round_metrics.append(metrics)
         logger.info(
@@ -240,17 +271,17 @@ class HospitalClient:
             (self.privacy_budget_spent / self.cfg.dp.epsilon * 100)
             if self.cfg.dp.enabled and self.cfg.dp.epsilon > 0 else 0.0
         )
-        _tracker.log(
-            {
-                f"{self.hospital_id}/train_loss": train_loss,
-                f"{self.hospital_id}/num_samples": len(self.local_data),
-                f"{self.hospital_id}/training_time_seconds": elapsed,
-                f"{self.hospital_id}/lora_params_shared": metrics["lora_params_shared"],
-                f"{self.hospital_id}/privacy_budget_spent": self.privacy_budget_spent,
-                f"{self.hospital_id}/privacy_budget_pct": budget_pct,
-            },
-            step=round_num,
-        )
+        tracker_payload = {
+            f"{self.hospital_id}/train_loss": train_loss,
+            f"{self.hospital_id}/num_samples": len(self.local_data),
+            f"{self.hospital_id}/training_time_seconds": elapsed,
+            f"{self.hospital_id}/lora_params_shared": metrics["lora_params_shared"],
+            f"{self.hospital_id}/privacy_budget_spent": self.privacy_budget_spent,
+            f"{self.hospital_id}/privacy_budget_pct": budget_pct,
+        }
+        if use_adaptive and round_epsilon is not None:
+            tracker_payload[f"{self.hospital_id}/adaptive_dp_round_epsilon"] = round_epsilon
+        _tracker.log(tracker_payload, step=round_num)
 
         # Cleanup
         del model, base_copy, trainer
