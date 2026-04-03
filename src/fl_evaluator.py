@@ -491,9 +491,11 @@ class EvalAccumulator:
             if not results:
                 continue
             best_acc   = max(r.accuracy for r in results)
+            best_round = max(range(len(results)), key=lambda i: results[i].accuracy)
             final      = results[-1]
             out[label] = {
                 "best_accuracy":        round(best_acc, 4),
+                "best_round":           best_round,
                 "final_accuracy":       round(final.accuracy, 4),
                 "final_loss":           round(final.loss, 4),
                 "final_perplexity":     round(final.perplexity, 2),

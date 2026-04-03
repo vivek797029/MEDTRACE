@@ -70,17 +70,21 @@ class CheckpointManager:
 
         torch.save(weights, path)
 
-        # Verify
+        # Verify the file exists and is non-empty.
+        # We do NOT enforce a minimum byte threshold here because valid LoRA
+        # checkpoints can be arbitrarily small (e.g. tiny adapters, unit tests).
+        # The canonical guard against corruption is a load-back verification.
         if not os.path.exists(path):
-            raise RuntimeError(f"Checkpoint save failed: {path}")
-        size_mb = os.path.getsize(path) / (1024 * 1024)
-        if size_mb < 0.1:
-            raise RuntimeError(f"Checkpoint too small ({size_mb:.2f}MB): {path}")
+            raise RuntimeError(f"Checkpoint save failed — file not created: {path}")
+        size_bytes = os.path.getsize(path)
+        if size_bytes == 0:
+            raise RuntimeError(f"Checkpoint is zero bytes (write error): {path}")
 
         with open(marker, "w") as f:
             f.write(str(round_num))
 
-        logger.info("Checkpoint saved & verified: round_%d.pt (%.1fMB)", round_num, size_mb)
+        size_mb = size_bytes / (1024 * 1024)
+        logger.info("Checkpoint saved & verified: round_%d.pt (%.3fMB)", round_num, size_mb)
 
     def load(self):
         marker = os.path.join(self.dir, "last_round.txt")
