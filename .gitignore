@@ -1,5 +1,59 @@
-medtrace_env/
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
-.DS_Store
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+MANIFEST
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+medtrace_env/
+.venv/
+venv/
+env/
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── Linting ───────────────────────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── ML model artefacts ────────────────────────────────────────────────────────
+outputs/
+checkpoints/
+runs/
+mlflow_runs/
+wandb/
 *.pt
+*.pth
+*.bin
+*.safetensors
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data/
+!tests/fixtures/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*~

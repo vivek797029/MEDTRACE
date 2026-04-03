@@ -13,6 +13,29 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+
+# ─── Exception Hierarchy ─────────────────────────────────────────────────────
+
+class MedTraceError(Exception):
+    """Base exception for all MedTrace errors."""
+
+
+class ConfigurationError(MedTraceError):
+    """Raised when a configuration value is invalid or inconsistent."""
+
+
+class AggregationError(MedTraceError):
+    """Raised when federated aggregation cannot proceed (e.g. no updates, key mismatch)."""
+
+
+class PrivacyBudgetExhausted(MedTraceError):
+    """Raised when a client's cumulative epsilon exceeds the configured budget."""
+
+
+class CheckpointError(MedTraceError):
+    """Raised when a checkpoint cannot be saved or loaded."""
+
+
 # ─── Shared Type Aliases ─────────────────────────────────────────────────────
 # Defined here so client, server, and simulation modules all import from a
 # single source of truth instead of duplicating these aliases.

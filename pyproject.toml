@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "medtrace-fl"
+version = "0.3.0"
+description = "Federated learning for privacy-preserving medical AI with adaptive differential privacy"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "VN", email = "vkn797029@gmail.com" },
+]
+keywords = [
+    "federated-learning",
+    "differential-privacy",
+    "medical-ai",
+    "large-language-models",
+    "lora",
+    "privacy-preserving-ml",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "torch>=2.1.0",
+    "transformers>=4.36.0",
+    "peft>=0.7.0",
+    "datasets>=2.16.0",
+    "accelerate>=0.25.0",
+    "sentencepiece>=0.1.99",
+    "protobuf>=3.20.0",
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+tracking = [
+    "mlflow>=2.9.0",
+    "wandb>=0.16.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "medtrace-fl[tracking,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/vkn797029/medtrace"
+Repository = "https://github.com/vkn797029/medtrace"
+"Bug Tracker" = "https://github.com/vkn797029/medtrace/issues"
+
+[project.scripts]
+medtrace-train = "fl_simulate:main"
+medtrace-eval  = "run_eval:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths    = ["tests"]
+addopts      = "-v --tb=short"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests that require GPU or long training runs (deselect with -m 'not slow')",
+    "requires_torch: marks tests that need PyTorch installed",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.coverage.run]
+source = ["src"]
+omit   = ["src/0*.py", "src/build_fl_notebook*.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty   = true

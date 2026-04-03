@@ -32,7 +32,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fl_client import HospitalClient
-from fl_config import FLConfig
+from fl_config import ConfigurationError, FLConfig
 from fl_server import FederatedServer
 from fl_tracker import ExperimentTracker, create_tracker
 
@@ -188,7 +188,7 @@ def run_simulation(
 
     # Fail fast with a clear message instead of an obscure error later
     if not cfg.hospitals:
-        raise ValueError(
+        raise ConfigurationError(
             "FLConfig.hospitals is empty — provide at least one hospital. "
             "Use HospitalRegistry.build(n) to create n hospital configs."
         )

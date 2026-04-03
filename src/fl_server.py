@@ -18,7 +18,9 @@ import torch
 from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from fl_config import FLConfig, Metrics, WeightDict, config as default_config
+from fl_config import (
+    AggregationError, FLConfig, Metrics, WeightDict, config as default_config,
+)
 from fl_tracker import ExperimentTracker, NoOpTracker
 
 logger = logging.getLogger(__name__)
@@ -120,7 +122,7 @@ class FederatedServer:
         t0 = time.time()
 
         if not client_updates:
-            raise ValueError("aggregate() called with no client updates")
+            raise AggregationError("aggregate() called with no client updates")
 
         if self.cfg.dp.secure_aggregation:
             logger.info("Secure aggregation: simulating encrypted weight transfer")
@@ -141,13 +143,13 @@ class FederatedServer:
             elif keys != reference_keys:
                 missing = reference_keys - keys
                 extra   = keys - reference_keys
-                raise ValueError(
+                raise AggregationError(
                     f"Weight key mismatch for client {hospital_id!r}. "
                     f"Missing: {missing}. Extra: {extra}."
                 )
 
         if total_samples == 0:
-            raise ValueError("All clients reported 0 training samples")
+            raise AggregationError("All clients reported 0 training samples")
 
         for hospital_id, (_, metrics) in client_updates.items():
             fracs[hospital_id] = metrics["num_samples"] / total_samples

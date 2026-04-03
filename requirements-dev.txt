@@ -1,0 +1,7 @@
+# Development and testing dependencies
+# Install with: pip install -r requirements-dev.txt --break-system-packages
+
+pytest>=7.4.0
+pytest-cov>=4.1.0
+ruff>=0.1.0
+matplotlib>=3.7.0    # required for fl_plots tests

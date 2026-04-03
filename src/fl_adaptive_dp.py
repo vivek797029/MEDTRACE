@@ -56,7 +56,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-import torch
+try:
+    import torch
+except ImportError:  # pragma: no cover — GPU path only
+    torch = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
