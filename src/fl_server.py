@@ -76,7 +76,7 @@ class FederatedServer:
                 self.global_weights[name] = param.detach().cpu().clone()
 
         param_count = sum(p.numel() for p in self.global_weights.values())
-        size_kb = sum(p.nbytes for p in self.global_weights.values()) / 1024
+        size_kb = sum(p.element_size() * p.numel() for p in self.global_weights.values()) / 1024
         logger.info("Global LoRA params: %s | Size: %.1f KB", f"{param_count:,}", size_kb)
 
         del model
@@ -118,10 +118,13 @@ class FederatedServer:
             logger.info("  %s: weight=%.3f (%d samples)", name, frac, n)
             self.hospital_contributions[name] = {"round": round_num, "weight": frac, "samples": n}
 
-        # Weighted average
+        # Weighted average — use explicit zero init to avoid int+Tensor ambiguity
         aggregated = OrderedDict()
         for key in all_weights[0].keys():
-            aggregated[key] = sum(fracs[i] * all_weights[i][key] for i in range(len(all_weights)))
+            acc = fracs[0] * all_weights[0][key]
+            for i in range(1, len(all_weights)):
+                acc = acc + fracs[i] * all_weights[i][key]
+            aggregated[key] = acc
 
         self._validate_weights(aggregated)
         self.global_weights = aggregated

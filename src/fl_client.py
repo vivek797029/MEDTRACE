@@ -256,8 +256,8 @@ class HospitalClient:
 
         noisy = OrderedDict()
         for name, param in weights.items():
-            # Clip
-            norm = torch.norm(param)
+            # Clip (convert norm to scalar for reliable comparison)
+            norm = torch.norm(param).item()
             if norm > max_norm:
                 param = param * (max_norm / norm)
             # Add noise
