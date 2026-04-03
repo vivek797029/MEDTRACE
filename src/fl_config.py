@@ -101,6 +101,41 @@ class TrainingConfig:
 
 
 @dataclass(frozen=True)
+class EvalConfig:
+    """
+    Configuration for the evaluation system.
+
+    Controls when evaluation runs, how many samples are used, and where
+    results (JSON, CSV, plots) are written.  All randomness is seeded via
+    ``eval_seed`` so every experiment is exactly reproducible.
+    """
+    # When to evaluate
+    enabled: bool = True
+    eval_every_n_rounds: int = 1        # 1 = every round, 2 = every other, etc.
+
+    # Dataset split
+    num_eval_samples: int = 200         # questions sampled from MedQA test set
+    eval_seed: int = 42                 # fixed seed for reproducible splits
+
+    # MCQ scoring
+    max_eval_batch: int = 32            # max examples per accuracy pass (memory)
+
+    # Output
+    output_dir: str = "outputs/evaluation"
+    save_plots: bool = True
+    plot_format: str = "png"            # "png" | "pdf" | "svg"
+    plot_dpi: int = 150
+
+    def __post_init__(self):
+        if self.eval_every_n_rounds < 1:
+            raise ValueError(f"eval_every_n_rounds must be ≥ 1, got {self.eval_every_n_rounds}")
+        if self.num_eval_samples < 1:
+            raise ValueError(f"num_eval_samples must be ≥ 1, got {self.num_eval_samples}")
+        if self.plot_format not in ("png", "pdf", "svg"):
+            raise ValueError(f"plot_format must be png/pdf/svg, got {self.plot_format!r}")
+
+
+@dataclass(frozen=True)
 class TrackerConfig:
     """
     Experiment tracking configuration.
@@ -162,6 +197,7 @@ class FLConfig:
     dp: DPConfig = field(default_factory=DPConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
 
     # Hospitals
     hospitals: Dict[str, HospitalConfig] = field(default_factory=lambda: {
@@ -250,6 +286,10 @@ class FLConfig:
                          "max_length": self.training.max_length},
             "tracker": {"backend": self.tracker.backend,
                         "project": self.tracker.project},
+            "eval": {"enabled": self.eval.enabled,
+                     "num_eval_samples": self.eval.num_eval_samples,
+                     "eval_seed": self.eval.eval_seed,
+                     "eval_every_n_rounds": self.eval.eval_every_n_rounds},
         }
 
 

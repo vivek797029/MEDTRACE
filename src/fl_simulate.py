@@ -149,6 +149,7 @@ def run_simulation(
     cfg: FLConfig,
     checkpoint_dir: Optional[str] = None,
     tracker: Optional[ExperimentTracker] = None,
+    on_round_end: Optional[callable] = None,
 ) -> dict:
     """
     Execute the full federated learning simulation.
@@ -161,6 +162,14 @@ def run_simulation(
             ``cfg.tracker.backend``.  Pass a pre-built tracker to share a run
             across multiple simulations, or pass ``NoOpTracker()`` to silence
             all tracking regardless of config.
+        on_round_end: optional callback invoked after every round, signature::
+
+                def on_round_end(round_num: int,
+                                 global_weights: WeightDict,
+                                 privacy_budget_spent: float) -> None
+
+            Used by the evaluation runner to trigger per-round model evaluation
+            without modifying this function's core logic.
     """
     # Build tracker from config if caller didn't supply one
     if tracker is None:
@@ -261,6 +270,16 @@ def run_simulation(
 
         # Step 4: Checkpoint
         ckpt.save(global_weights, round_num)
+
+        # Step 5: Per-round evaluation callback (used by run_eval.py)
+        if on_round_end is not None:
+            max_budget_spent = max(
+                h.privacy_budget_spent for h in hospitals.values()
+            )
+            try:
+                on_round_end(round_num, global_weights, max_budget_spent)
+            except Exception as _cb_exc:
+                logger.warning("on_round_end callback raised (non-fatal): %s", _cb_exc)
 
         # Periodic model save
         if (round_num + 1) % 5 == 0 or round_num == cfg.fl_rounds - 1:
