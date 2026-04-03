@@ -10,3 +10,4 @@ tqdm
 pandas
 scikit-learn
 numpy
+matplotlib>=3.7.0
