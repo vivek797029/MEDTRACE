@@ -19,6 +19,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from fl_config import FLConfig, Metrics, WeightDict, config as default_config
+from fl_tracker import ExperimentTracker, NoOpTracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,18 @@ logger = logging.getLogger(__name__)
 class FederatedServer:
     """Central aggregation server for federated MedTrace training."""
 
-    def __init__(self, device: str = "cpu", cfg: FLConfig = default_config):
+    def __init__(
+        self,
+        device: str = "cpu",
+        cfg: FLConfig = default_config,
+        tracker: Optional[ExperimentTracker] = None,
+    ):
         self.device = device
         self.cfg = cfg
         self.global_weights: Optional[WeightDict] = None
         self.round_metrics: List[Metrics] = []
         self.hospital_contributions: Dict[str, Metrics] = {}
+        self.tracker: ExperimentTracker = tracker if tracker is not None else NoOpTracker()
 
         logger.info("Aggregation server initialized | Strategy: %s | Hospitals: %d | Rounds: %d",
                      cfg.aggregation_strategy, cfg.num_hospitals, cfg.fl_rounds)
@@ -137,7 +144,35 @@ class FederatedServer:
         }
         self.round_metrics.append(metrics)
 
-        logger.info("Aggregation complete (%.3fs) | Divergence: %.6f", elapsed, divergence)
+        # ── Compute and log round-level aggregated loss ──────────────────────
+        # Weighted average of per-hospital losses (FedAvg loss)
+        losses = [m["train_loss"] for _, m in client_updates.values()]
+        weights_losses = [
+            m["num_samples"] / total_samples for _, m in client_updates.values()
+        ]
+        avg_loss = sum(l * w for l, w in zip(losses, weights_losses))
+
+        self.tracker.log(
+            {
+                "round/avg_loss": avg_loss,
+                "round/min_loss": min(losses),
+                "round/max_loss": max(losses),
+                "round/weight_divergence": divergence,
+                "round/aggregation_time": elapsed,
+                "round/total_samples": total_samples,
+                "round/num_hospitals": len(client_updates),
+            },
+            step=round_num,
+        )
+        # Per-hospital contribution weights (useful for stacked bar chart)
+        contribution_log = {
+            f"contribution/{name}": frac
+            for name, frac in zip(hospital_names, fracs)
+        }
+        self.tracker.log(contribution_log, step=round_num)
+
+        logger.info("Aggregation complete (%.3fs) | Divergence: %.6f | Avg loss: %.4f",
+                    elapsed, divergence, avg_loss)
         return self.global_weights
 
     # ─── Validation ───────────────────────────────────────────
@@ -230,6 +265,19 @@ class FederatedServer:
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        # Log evaluation results as a table and as individual text entries
+        if results:
+            final_round = self.cfg.fl_rounds - 1
+            self.tracker.log_table("eval/responses", results, step=final_round)
+            for i, r in enumerate(results):
+                q_slug = self.tracker._slug(r["question"])
+                self.tracker.log_text(
+                    f"eval/q{i:02d}_{q_slug}",
+                    f"Q: {r['question']}\n\nA: {r['response']}",
+                    step=final_round,
+                )
+
         return results
 
     # ─── Reporting ────────────────────────────────────────────

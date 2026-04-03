@@ -101,6 +101,40 @@ class TrainingConfig:
 
 
 @dataclass(frozen=True)
+class TrackerConfig:
+    """
+    Experiment tracking configuration.
+
+    Set ``backend`` to select the tracking system:
+
+    * ``"none"``    — no-op (default, no dependencies required)
+    * ``"mlflow"``  — local or remote MLflow server (``pip install mlflow``)
+    * ``"wandb"``   — Weights & Biases cloud/local (``pip install wandb``)
+
+    MLflow runs a local SQLite-backed server by default (``mlflow_uri``
+    is the directory for the MLflow store).  Point it at a remote URI
+    (``http://...``) to send metrics to a shared server.
+
+    W&B requires a free account and ``WANDB_API_KEY`` env var, or call
+    ``wandb login`` once before training.
+    """
+    backend: str = "none"               # "none" | "mlflow" | "wandb"
+    project: str = "medtrace-fl"        # W&B project / MLflow experiment name
+    run_name: Optional[str] = None      # auto-generated if None
+    mlflow_uri: str = "mlflow_runs"     # local dir or http://host:port
+    wandb_entity: Optional[str] = None  # W&B team / user (None = default)
+    tags: List[str] = field(default_factory=list)
+    log_model_artifact: bool = False    # upload final model as artifact (slow)
+
+    def __post_init__(self):
+        if self.backend not in ("none", "mlflow", "wandb"):
+            raise ValueError(
+                f"TrackerConfig.backend must be 'none', 'mlflow', or 'wandb', "
+                f"got {self.backend!r}"
+            )
+
+
+@dataclass(frozen=True)
 class FLConfig:
     """
     Top-level federated learning configuration. Immutable after creation.
@@ -127,6 +161,7 @@ class FLConfig:
     lora: LoRAConfig = field(default_factory=LoRAConfig)
     dp: DPConfig = field(default_factory=DPConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    tracker: TrackerConfig = field(default_factory=TrackerConfig)
 
     # Hospitals
     hospitals: Dict[str, HospitalConfig] = field(default_factory=lambda: {
@@ -213,6 +248,8 @@ class FLConfig:
             "training": {"lr": self.training.learning_rate,
                          "batch_size": self.training.batch_size,
                          "max_length": self.training.max_length},
+            "tracker": {"backend": self.tracker.backend,
+                        "project": self.tracker.project},
         }
 
 

@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fl_client import HospitalClient
 from fl_config import FLConfig
 from fl_server import FederatedServer
+from fl_tracker import ExperimentTracker, create_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +145,26 @@ def build_reasoning_format(dataset):
 
 # ─── Main Simulation ──────────────────────────────────────────
 
-def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
-    """Execute the full federated learning simulation."""
+def run_simulation(
+    cfg: FLConfig,
+    checkpoint_dir: Optional[str] = None,
+    tracker: Optional[ExperimentTracker] = None,
+) -> dict:
+    """
+    Execute the full federated learning simulation.
+
+    Args:
+        cfg: immutable FL configuration.
+        checkpoint_dir: directory for round-level checkpoints.  Auto-detected
+            for Colab/Kaggle if None.
+        tracker: experiment tracker instance.  If None, one is created from
+            ``cfg.tracker.backend``.  Pass a pre-built tracker to share a run
+            across multiple simulations, or pass ``NoOpTracker()`` to silence
+            all tracking regardless of config.
+    """
+    # Build tracker from config if caller didn't supply one
+    if tracker is None:
+        tracker = create_tracker(cfg)
 
     logger.info("=" * 60)
     logger.info("MedTrace Federated Learning Simulation")
@@ -177,8 +196,11 @@ def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
 
     ckpt = CheckpointManager(checkpoint_dir)
 
+    # Start experiment run (logs all hyperparameters as config)
+    tracker.start_run(cfg)
+
     # Server + resume
-    server = FederatedServer(device=device, cfg=cfg)
+    server = FederatedServer(device=device, cfg=cfg, tracker=tracker)
     global_weights, last_completed = ckpt.load()
     start_round = last_completed + 1
 
@@ -226,6 +248,7 @@ def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
             w, m = client.train_local(
                 global_weights, tokenizer, round_num,
                 cfg.hospital_models_dir, base_model=shared_base,
+                tracker=tracker,
             )
             client_updates[hid] = (w, m)
 
@@ -250,6 +273,26 @@ def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
         avg = (time.time() - total_start) / rounds_done
         remaining = (cfg.fl_rounds - round_num - 1) * avg / 60
         logger.info("Round %d complete: %.1fs | ETA: %.0f min", round_num + 1, elapsed, remaining)
+
+        # Privacy budget: use the maximum spent across all hospitals
+        # (conservative accounting — each hospital independently noises its update)
+        max_budget_spent = max(
+            h.privacy_budget_spent for h in hospitals.values()
+        )
+        budget_remaining = max(0.0, cfg.dp.epsilon - max_budget_spent)
+        budget_pct = min(100.0, max_budget_spent / cfg.dp.epsilon * 100) if cfg.dp.epsilon > 0 else 0.0
+
+        tracker.log(
+            {
+                "round/time_seconds": elapsed,
+                "round/eta_minutes": remaining,
+                "privacy/budget_total_epsilon": cfg.dp.epsilon,
+                "privacy/budget_spent": max_budget_spent,
+                "privacy/budget_remaining": budget_remaining,
+                "privacy/budget_pct_used": budget_pct,
+            },
+            step=round_num,
+        )
 
         all_round_metrics.append({
             "round": round_num + 1,
@@ -285,6 +328,30 @@ def run_simulation(cfg: FLConfig, checkpoint_dir: Optional[str] = None) -> dict:
     logger.info("=" * 60)
     logger.info("TRAINING COMPLETE | Total: %.1fs | Report: %s", total_elapsed, report_path)
     logger.info("Model: %s", cfg.global_model_dir)
+
+    # ── Final summary + tracker close ────────────────────────────────────────
+    # Compute final round's avg loss from the last server round_metrics entry
+    server_metrics = server.get_metrics()
+    final_round_metrics = server_metrics[-1] if server_metrics else {}
+    final_avg_loss = final_round_metrics.get("avg_loss", 0.0)
+    final_divergence = final_round_metrics.get("weight_divergence", 0.0)
+
+    max_budget_final = max(h.privacy_budget_spent for h in hospitals.values())
+    tracker.log_summary(
+        {
+            "total_training_time_minutes": total_elapsed / 60,
+            "rounds_completed": cfg.fl_rounds - start_round,
+            "final_weight_divergence": final_divergence,
+            "final_privacy_budget_spent": max_budget_final,
+            "final_privacy_budget_pct": min(100.0, max_budget_final / cfg.dp.epsilon * 100)
+            if cfg.dp.epsilon > 0 else 0.0,
+        }
+    )
+
+    # Upload the JSON report as a tracked artifact
+    tracker.log_artifact(report_path)
+
+    tracker.end_run()
 
     return report
 

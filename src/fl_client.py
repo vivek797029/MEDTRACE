@@ -27,6 +27,7 @@ from transformers import (
 )
 
 from fl_config import FLConfig, HospitalConfig, Metrics, WeightDict, config as default_config
+from fl_tracker import ExperimentTracker, NoOpTracker
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ class HospitalClient:
         round_num: int,
         output_dir: str,
         base_model: Optional[AutoModelForCausalLM] = None,
+        tracker: Optional[ExperimentTracker] = None,
     ) -> Tuple[WeightDict, Metrics]:
         """
         Train LoRA adapter on local hospital data.
@@ -121,7 +123,10 @@ class HospitalClient:
             output_dir: directory for temp training artifacts.
             base_model: optional pre-loaded base model. If provided, it will be
                         deep-copied (caller retains ownership). If None, loads fresh.
+            tracker: experiment tracker for logging per-client metrics.
+                     Defaults to NoOpTracker (no logging).
         """
+        _tracker = tracker if tracker is not None else NoOpTracker()
         if self.local_data is None:
             raise RuntimeError(
                 f"{self.name}: call prepare_local_data() before train_local()"
@@ -192,6 +197,16 @@ class HospitalClient:
         trainer.train()
         elapsed = time.time() - t0
 
+        # Log per-step training loss for the loss-curve chart
+        # trainer.state.log_history contains {"loss": ..., "step": ...} dicts
+        for entry in trainer.state.log_history:
+            if "loss" in entry and "step" in entry:
+                global_step = round_num * 1000 + int(entry["step"])
+                _tracker.log(
+                    {f"{self.hospital_id}/step_loss": entry["loss"]},
+                    step=global_step,
+                )
+
         # Extract LoRA weights
         lora_weights = self._extract_lora_weights(model)
 
@@ -218,6 +233,23 @@ class HospitalClient:
             "%s — Loss: %.4f | Time: %.1fs | Params: %s",
             self.name, train_loss, elapsed,
             f"{metrics['lora_params_shared']:,}",
+        )
+
+        # Log per-client round metrics to the experiment tracker
+        budget_pct = (
+            (self.privacy_budget_spent / self.cfg.dp.epsilon * 100)
+            if self.cfg.dp.enabled and self.cfg.dp.epsilon > 0 else 0.0
+        )
+        _tracker.log(
+            {
+                f"{self.hospital_id}/train_loss": train_loss,
+                f"{self.hospital_id}/num_samples": len(self.local_data),
+                f"{self.hospital_id}/training_time_seconds": elapsed,
+                f"{self.hospital_id}/lora_params_shared": metrics["lora_params_shared"],
+                f"{self.hospital_id}/privacy_budget_spent": self.privacy_budget_spent,
+                f"{self.hospital_id}/privacy_budget_pct": budget_pct,
+            },
+            step=round_num,
         )
 
         # Cleanup
