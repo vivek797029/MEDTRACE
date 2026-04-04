@@ -1,0 +1,484 @@
+"""
+Generates MedTrace_FL_Kaggle.ipynb
+
+Kaggle-specific differences from the Colab version:
+  - No google.colab / drive.mount() — uses /kaggle/working/ instead
+  - /kaggle/working/ persists across reruns automatically (no auth needed)
+  - Interactive input() removed — hangs on Kaggle
+  - Internet must be enabled: Settings → Internet → On
+  - GPU: T4 (16 GB) or P100 (16 GB) — both work
+
+Run:
+    python3 build_kaggle_notebook.py
+"""
+import json
+
+REPO_URL  = "https://github.com/vivek797029/MEDTRACE.git"
+REPO_DIR  = "/kaggle/working/MEDTRACE"
+SRC_DIR   = f"{REPO_DIR}/src"
+WORK_DIR  = "/kaggle/working/medtrace"
+
+cells = []
+
+
+def md(*lines):
+    cells.append({
+        "cell_type": "markdown",
+        "metadata": {},
+        "source": list(lines),
+    })
+
+
+def code(*lines):
+    cells.append({
+        "cell_type": "code",
+        "metadata": {},
+        "source": list(lines),
+        "execution_count": None,
+        "outputs": [],
+    })
+
+
+# ─── Cell 1: Title ────────────────────────────────────────────────────────────
+md(
+    "# MedTrace FL — Federated Learning for Privacy-Preserving Medical AI\n",
+    "\n",
+    "**Kaggle edition** — pure entry point into the GitHub repository.  \n",
+    "All training logic lives in the repo. Nothing is duplicated here.\n",
+    "\n",
+    "| What runs | Where it lives |\n",
+    "|---|---|\n",
+    "| `run_simulation()` | `src/fl_simulate.py` |\n",
+    "| `FLConfig` dataclasses | `src/fl_config.py` |\n",
+    "| `AdaptiveDPMechanism` | `src/fl_adaptive_dp.py` |\n",
+    "| Evaluation + plots | `src/fl_evaluator.py`, `src/fl_plots.py` |\n",
+    "\n",
+    "**Auto-resume:** checkpoints are saved to `/kaggle/working/` which persists  \n",
+    "between runs. If the session times out, click **Run All** — training resumes  \n",
+    "from the last completed round automatically.\n",
+    "\n",
+    "---\n",
+    "## Before running — 3 required settings\n",
+    "\n",
+    "On the right sidebar:\n",
+    "1. **Accelerator** → select **GPU T4 x1** (or P100)\n",
+    "2. **Internet** → turn **On** (needed to clone from GitHub)\n",
+    "3. Click **Save** then **Run All**\n",
+    "\n",
+    "## Kaggle free GPU budget\n",
+    "| GPU | VRAM | Hours/week | 20 rounds (est.) |\n",
+    "|-----|------|-----------|------------------|\n",
+    "| T4  | 16 GB | 30 hrs ✅ | ~5–7 hrs ✅ |\n",
+    "| P100 | 16 GB | 30 hrs ✅ | ~4–6 hrs ✅ |\n",
+    "\n",
+    "> Both GPUs are free and have enough VRAM. T4 is more commonly available.\n",
+)
+
+# ─── Cell 2: Step 1 header ────────────────────────────────────────────────────
+md("## Step 1 — Verify GPU\n")
+
+# ─── Cell 3: GPU check (no Drive mount — Kaggle storage is automatic) ─────────
+code(
+    "import os, sys, torch\n",
+    "\n",
+    "# ── GPU check ─────────────────────────────────────────────────────────────\n",
+    "if not torch.cuda.is_available():\n",
+    "    raise SystemExit(\n",
+    "        'No GPU detected.\\n'\n",
+    "        'On the right sidebar: Accelerator → GPU T4 x1, then Run All again.'\n",
+    "    )\n",
+    "\n",
+    "gpu_name = torch.cuda.get_device_name(0)\n",
+    "gpu_mem  = torch.cuda.get_device_properties(0).total_memory / 1e9\n",
+    "print(f'GPU  : {gpu_name}')\n",
+    "print(f'VRAM : {gpu_mem:.1f} GB')\n",
+    "\n",
+    "# ── Kaggle working directory (persists between runs — no auth needed) ─────\n",
+    "WORK_DIR = '" + WORK_DIR + "'\n",
+    "os.makedirs(WORK_DIR, exist_ok=True)\n",
+    "print(f'Work : {WORK_DIR}')\n",
+    "print('Ready.')\n",
+)
+
+# ─── Cell 4: Step 2 header ────────────────────────────────────────────────────
+md(
+    "## Step 2 — Clone repository and install dependencies\n",
+    "\n",
+    "> **If you see a network error here:** Internet is not enabled.  \n",
+    "> Go to the right sidebar → Internet → On → Save, then Run All again.\n",
+)
+
+# ─── Cell 5: Clone + install ──────────────────────────────────────────────────
+code(
+    "import subprocess, importlib\n",
+    "\n",
+    "REPO_URL = '" + REPO_URL + "'\n",
+    "REPO_DIR = '" + REPO_DIR + "'\n",
+    "SRC_DIR  = '" + SRC_DIR  + "'\n",
+    "\n",
+    "# ── Clone or pull ─────────────────────────────────────────────────────────\n",
+    "if os.path.exists(REPO_DIR):\n",
+    "    print('Repository already present — pulling latest...')\n",
+    "    result = subprocess.run(\n",
+    "        ['git', '-C', REPO_DIR, 'pull', '--ff-only'],\n",
+    "        capture_output=True, text=True\n",
+    "    )\n",
+    "    print(result.stdout.strip() or 'Already up to date.')\n",
+    "else:\n",
+    "    print(f'Cloning {REPO_URL} ...')\n",
+    "    subprocess.run(\n",
+    "        ['git', 'clone', '--depth', '1', REPO_URL, REPO_DIR],\n",
+    "        check=True\n",
+    "    )\n",
+    "    print('Clone complete.')\n",
+    "\n",
+    "# ── Install from requirements.txt ─────────────────────────────────────────\n",
+    "req = os.path.join(REPO_DIR, 'requirements.txt')\n",
+    "print('\\nInstalling dependencies (~2 min on first run)...')\n",
+    "subprocess.run(\n",
+    "    [sys.executable, '-m', 'pip', 'install', '-q', '-r', req],\n",
+    "    check=True\n",
+    ")\n",
+    "print('Install complete.')\n",
+    "\n",
+    "# ── Add src/ to Python path ───────────────────────────────────────────────\n",
+    "if SRC_DIR not in sys.path:\n",
+    "    sys.path.insert(0, SRC_DIR)\n",
+    "\n",
+    "# ── Verify all project modules are importable ─────────────────────────────\n",
+    "print('\\nModule check:')\n",
+    "for mod_name in [\n",
+    "    'fl_config', 'fl_simulate', 'fl_adaptive_dp',\n",
+    "    'fl_evaluator', 'fl_plots', 'fl_tracker',\n",
+    "]:\n",
+    "    importlib.import_module(mod_name)\n",
+    "    print(f'  OK  {mod_name}')\n",
+    "\n",
+    "print('\\nSetup complete — ready to train.')\n",
+)
+
+# ─── Cell 6: Step 3 header ────────────────────────────────────────────────────
+md(
+    "## Step 3 — Configure the experiment\n",
+    "\n",
+    "All paths point to `/kaggle/working/` which Kaggle preserves between runs.  \n",
+    "Edit `fl_rounds` or `hospitals` to change the experiment size.\n",
+)
+
+# ─── Cell 7: Configuration ────────────────────────────────────────────────────
+code(
+    "import math\n",
+    "from fl_config import (\n",
+    "    FLConfig, DPConfig, AdaptiveDPConfig,\n",
+    "    LoRAConfig, TrainingConfig, EvalConfig,\n",
+    "    TrackerConfig, HospitalRegistry,\n",
+    ")\n",
+    "\n",
+    "# ── Paths (all inside /kaggle/working/ — persists across runs) ───────────\n",
+    "OUTPUT_DIR  = os.path.join(WORK_DIR, 'outputs')\n",
+    "CKPT_DIR    = os.path.join(WORK_DIR, 'checkpoints')\n",
+    "\n",
+    "os.makedirs(OUTPUT_DIR, exist_ok=True)\n",
+    "os.makedirs(CKPT_DIR,   exist_ok=True)\n",
+    "\n",
+    "# ── Build experiment config ───────────────────────────────────────────────\n",
+    "cfg = FLConfig(\n",
+    "    # Model\n",
+    "    base_model   = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0',\n",
+    "\n",
+    "    # Federated learning\n",
+    "    fl_rounds    = 20,      # set to 2 for a quick smoke-test\n",
+    "    local_epochs = 1,\n",
+    "    hospitals    = HospitalRegistry.build(3),   # 3 specialty hospitals\n",
+    "\n",
+    "    # LoRA adapter\n",
+    "    lora = LoRAConfig(r=8, alpha=16, dropout=0.05),\n",
+    "\n",
+    "    # Differential privacy (epsilon, delta)-DP via Gaussian mechanism\n",
+    "    dp = DPConfig(\n",
+    "        enabled       = True,\n",
+    "        epsilon       = 8.0,\n",
+    "        delta         = 1e-5,\n",
+    "        max_grad_norm = 1.0,\n",
+    "    ),\n",
+    "\n",
+    "    # Adaptive per-client DP (novel contribution)\n",
+    "    adaptive_dp = AdaptiveDPConfig(\n",
+    "        enabled              = True,\n",
+    "        ema_alpha            = 0.1,\n",
+    "        min_epsilon_fraction = 0.1,\n",
+    "    ),\n",
+    "\n",
+    "    # Training\n",
+    "    training = TrainingConfig(\n",
+    "        batch_size                  = 4,\n",
+    "        gradient_accumulation_steps = 4,\n",
+    "        learning_rate               = 2e-4,\n",
+    "        max_length                  = 512,\n",
+    "    ),\n",
+    "\n",
+    "    # Evaluation every 5 rounds\n",
+    "    eval = EvalConfig(\n",
+    "        enabled             = True,\n",
+    "        eval_every_n_rounds = 5,\n",
+    "        num_eval_samples    = 200,\n",
+    "    ),\n",
+    "\n",
+    "    # Tracking: 'none' | 'mlflow' | 'wandb'\n",
+    "    tracker = TrackerConfig(backend='none'),\n",
+    "\n",
+    "    # All 4 path fields — must be set explicitly so they point to /kaggle/working/\n",
+    "    output_dir          = OUTPUT_DIR,\n",
+    "    global_model_dir    = os.path.join(OUTPUT_DIR, 'global_model'),\n",
+    "    hospital_models_dir = os.path.join(OUTPUT_DIR, 'hospital_models'),\n",
+    "    metrics_dir         = os.path.join(OUTPUT_DIR, 'metrics'),\n",
+    ")\n",
+    "\n",
+    "# ── Summary ───────────────────────────────────────────────────────────────\n",
+    "print('Experiment configuration')\n",
+    "print(f'  Model       : {cfg.base_model}')\n",
+    "print(f'  Hospitals   : {cfg.num_hospitals}')\n",
+    "for hid, h in cfg.hospitals.items():\n",
+    "    steps = h.num_samples // cfg.training.batch_size\n",
+    "    print(f'    {hid}: {h.name} — {h.num_samples} samples, {steps} steps/round')\n",
+    "total_steps = sum(\n",
+    "    h.num_samples // cfg.training.batch_size\n",
+    "    for h in cfg.hospitals.values()\n",
+    ") * cfg.fl_rounds * cfg.local_epochs\n",
+    "print(f'  FL rounds   : {cfg.fl_rounds}')\n",
+    "print(f'  Total steps : ~{total_steps:,}')\n",
+    "print(f'  Est. time   : ~{total_steps * 1.0 / 3600:.1f}–{total_steps * 1.2 / 3600:.1f} hrs on T4/P100')\n",
+    "if cfg.dp.enabled:\n",
+    "    print(f'  DP          : enabled  epsilon={cfg.dp.epsilon}  sigma={cfg.dp.sigma:.4f}')\n",
+    "    print(f'  Adaptive DP : {cfg.adaptive_dp.enabled}')\n",
+    "print(f'  Output dir  : {cfg.output_dir}')\n",
+    "print(f'  Checkpoints : {CKPT_DIR}')\n",
+)
+
+# ─── Cell 8: Step 4 header ────────────────────────────────────────────────────
+md(
+    "## Step 4 — Run federated training\n",
+    "\n",
+    "One call to `run_simulation()`. All logic runs from the cloned repository.  \n",
+    "**Session timed out?** Click Run All — resumes from the last checkpoint in `/kaggle/working/`.\n",
+    "\n",
+    "**Training progress** — you will see one INFO block per round:  \n",
+    "```\n",
+    "INFO | fl_server | Aggregating Round 1 (3 clients)...\n",
+    "INFO | fl_client | hospital_00 | Round 1 | Loss: 1.84\n",
+    "INFO | fl_server | Aggregation complete | Avg loss: 1.71 | Round: 1/20\n",
+    "```\n",
+    "Each completed round = 5% of total training done.\n",
+)
+
+# ─── Cell 9: Training ─────────────────────────────────────────────────────────
+code(
+    "from fl_simulate import run_simulation, setup_logging\n",
+    "import logging\n",
+    "\n",
+    "setup_logging(logging.INFO)\n",
+    "\n",
+    "report = run_simulation(\n",
+    "    cfg,\n",
+    "    checkpoint_dir = CKPT_DIR,\n",
+    ")\n",
+    "\n",
+    "# ── Summary ───────────────────────────────────────────────────────────────\n",
+    "print()\n",
+    "print('=' * 60)\n",
+    "print('Training complete')\n",
+    "print(f'  Time    : {report[\"total_training_time\"] / 60:.1f} min')\n",
+    "print(f'  Rounds  : {len(report[\"round_metrics\"])}')\n",
+    "if report['round_metrics']:\n",
+    "    last = report['round_metrics'][-1]\n",
+    "    print(f'  Loss    : {last[\"avg_loss\"]:.4f}')\n",
+    "    print(f'  Diverge : {last[\"weight_divergence\"]:.6f}')\n",
+    "if 'adaptive_dp_summary' in report:\n",
+    "    print('  DP budget per hospital:')\n",
+    "    for hid, s in report['adaptive_dp_summary']['per_client'].items():\n",
+    "        pct = s['budget_spent'] / cfg.dp.epsilon * 100\n",
+    "        print(f'    {hid}: {s[\"budget_spent\"]:.3f} / {cfg.dp.epsilon}  ({pct:.1f}%)')\n",
+    "print('=' * 60)\n",
+)
+
+# ─── Cell 10: Step 5 header ───────────────────────────────────────────────────
+md(
+    "## Step 5 — Plot training curves\n",
+    "\n",
+    "Saved to `/kaggle/working/medtrace/outputs/plots/`.  \n",
+    "Download them from the Output tab on the right.\n",
+)
+
+# ─── Cell 11: Plots ───────────────────────────────────────────────────────────
+code(
+    "import matplotlib\n",
+    "matplotlib.use('Agg')\n",
+    "import matplotlib.pyplot as plt\n",
+    "from fl_evaluator import EvalAccumulator, EvalResult\n",
+    "from fl_plots    import ResultsPlotter\n",
+    "\n",
+    "# ── Build accumulator from training report ────────────────────────────────\n",
+    "acc = EvalAccumulator()\n",
+    "acc.set_metadata(**{k: v for k, v in report['config'].items()\n",
+    "                    if isinstance(v, (str, int, float, bool))})\n",
+    "\n",
+    "eval_by_round = {\n",
+    "    er.get('round_num', 0): er.get('accuracy', 0.0)\n",
+    "    for er in report.get('eval_results', [])\n",
+    "    if isinstance(er, dict)\n",
+    "}\n",
+    "\n",
+    "for rm in report['round_metrics']:\n",
+    "    rn = rm['round']\n",
+    "    acc.add_eval_result(EvalResult(\n",
+    "        run_label            = 'MedTrace FL',\n",
+    "        round_num            = rn,\n",
+    "        accuracy             = eval_by_round.get(rn, 0.0),\n",
+    "        loss                 = rm['avg_loss'],\n",
+    "        perplexity           = 0.0,\n",
+    "        num_eval_samples     = rm['total_samples'],\n",
+    "        elapsed_seconds      = rm['aggregation_time'],\n",
+    "        privacy_budget_spent = 0.0,\n",
+    "    ))\n",
+    "    for hid, m in rm.get('hospital_metrics', {}).items():\n",
+    "        acc.add_client_metrics(hid, m)\n",
+    "\n",
+    "# ── Render and display ────────────────────────────────────────────────────\n",
+    "plot_dir = os.path.join(OUTPUT_DIR, 'plots')\n",
+    "os.makedirs(plot_dir, exist_ok=True)\n",
+    "plotter  = ResultsPlotter(output_dir=plot_dir, fmt='png', dpi=120)\n",
+    "paths    = plotter.save_all(acc)\n",
+    "\n",
+    "for path in paths:\n",
+    "    img = plt.imread(path)\n",
+    "    fig, ax = plt.subplots(figsize=(11, 4))\n",
+    "    ax.imshow(img)\n",
+    "    ax.axis('off')\n",
+    "    plt.tight_layout()\n",
+    "    plt.show()\n",
+    "    print(f'Saved: {path}')\n",
+    "\n",
+    "results_path = os.path.join(OUTPUT_DIR, 'results.json')\n",
+    "acc.save_json(results_path)\n",
+    "print(f'\\nResults JSON: {results_path}')\n",
+    "print(f'Download all outputs from the Output tab on the right sidebar.')\n",
+)
+
+# ─── Cell 12: Step 6 header ───────────────────────────────────────────────────
+md(
+    "## Step 6 — Evaluate the trained model\n",
+    "\n",
+    "Loads the final federated global model and runs inference on 3 clinical questions.\n",
+)
+
+# ─── Cell 13: Load model + eval ───────────────────────────────────────────────
+code(
+    "from transformers import AutoModelForCausalLM, AutoTokenizer\n",
+    "from peft import PeftModel\n",
+    "\n",
+    "# ── Locate the final global model ────────────────────────────────────────\n",
+    "_target = os.path.join(cfg.global_model_dir, f'round_{cfg.fl_rounds - 1}')\n",
+    "if not os.path.exists(_target):\n",
+    "    _available = sorted(\n",
+    "        int(d.split('_')[1])\n",
+    "        for d in os.listdir(cfg.global_model_dir)\n",
+    "        if d.startswith('round_')\n",
+    "        and os.path.isdir(os.path.join(cfg.global_model_dir, d))\n",
+    "    )\n",
+    "    if not _available:\n",
+    "        raise FileNotFoundError(\n",
+    "            f'No model rounds found in {cfg.global_model_dir}. '\n",
+    "            'Did training complete?'\n",
+    "        )\n",
+    "    _target = os.path.join(cfg.global_model_dir, f'round_{_available[-1]}')\n",
+    "    print(f'Note: loading round {_available[-1]} (highest available)')\n",
+    "\n",
+    "print(f'Loading model from: {_target}')\n",
+    "_device    = 'cuda' if torch.cuda.is_available() else 'cpu'\n",
+    "_tokenizer = AutoTokenizer.from_pretrained(_target)\n",
+    "_base      = AutoModelForCausalLM.from_pretrained(\n",
+    "    cfg.base_model,\n",
+    "    torch_dtype = torch.float16,\n",
+    "    device_map  = 'auto',\n",
+    ")\n",
+    "_model = PeftModel.from_pretrained(_base, _target)\n",
+    "_model.eval()\n",
+    "print('Model ready.\\n')\n",
+    "\n",
+    "# ── Inference helper ─────────────────────────────────────────────────────\n",
+    "def ask(question: str, max_new_tokens: int = 400) -> str:\n",
+    "    prompt = (\n",
+    "        f'<|system|>\\n{cfg.system_msg}</s>\\n'\n",
+    "        f'<|user|>\\n{question}</s>\\n'\n",
+    "        f'<|assistant|>\\n'\n",
+    "    )\n",
+    "    inputs = _tokenizer(prompt, return_tensors='pt').to(_device)\n",
+    "    with torch.no_grad():\n",
+    "        out = _model.generate(\n",
+    "            **inputs,\n",
+    "            max_new_tokens     = max_new_tokens,\n",
+    "            temperature        = 0.7,\n",
+    "            do_sample          = True,\n",
+    "            repetition_penalty = 1.1,\n",
+    "            pad_token_id       = _tokenizer.eos_token_id,\n",
+    "        )\n",
+    "    return _tokenizer.decode(\n",
+    "        out[0][inputs['input_ids'].shape[1]:],\n",
+    "        skip_special_tokens=True,\n",
+    "    )\n",
+    "\n",
+    "# ── Clinical evaluation questions ────────────────────────────────────────\n",
+    "_eval_questions = [\n",
+    "    'A 62-year-old man with hypertension has crushing chest pain radiating '\n",
+    "    'to the left arm, diaphoresis, and nausea for 45 min. ECG shows ST '\n",
+    "    'elevation in II, III, aVF. What is the immediate management?',\n",
+    "\n",
+    "    'A 55-year-old woman has sudden left-sided weakness, facial droop, and '\n",
+    "    'slurred speech for 2 hours. CT head shows no hemorrhage. Next step?',\n",
+    "\n",
+    "    'A returned traveller from sub-Saharan Africa has cyclic fever, rigors, '\n",
+    "    'and splenomegaly for 5 days. Blood smear shows ring-form trophozoites. '\n",
+    "    'Treatment?',\n",
+    "]\n",
+    "\n",
+    "for i, q in enumerate(_eval_questions, 1):\n",
+    "    print(f'Q{i}: {q}')\n",
+    "    print(f'A:  {ask(q)[:600]}')\n",
+    "    print('─' * 70)\n",
+    "\n",
+    "# ── Free GPU memory when done ─────────────────────────────────────────────\n",
+    "del _model, _base, _tokenizer\n",
+    "if torch.cuda.is_available():\n",
+    "    torch.cuda.empty_cache()\n",
+    "print('Memory freed.')\n",
+)
+
+# ─── Write notebook ───────────────────────────────────────────────────────────
+notebook = {
+    "nbformat": 4,
+    "nbformat_minor": 5,
+    "metadata": {
+        "kernelspec": {
+            "display_name": "Python 3",
+            "language": "python",
+            "name": "python3",
+        },
+        "language_info": {
+            "name": "python",
+            "version": "3.10.0",
+        },
+        "kaggle": {
+            "accelerator": "gpu",
+            "isInternetRequired": True,
+            "isGpuEnabled": True,
+        },
+    },
+    "cells": cells,
+}
+
+out_path = "MedTrace_FL_Kaggle.ipynb"
+with open(out_path, "w") as f:
+    json.dump(notebook, f, indent=1)
+
+print(f"Written : {out_path}")
+print(f"Cells   : {len(cells)}")
