@@ -333,8 +333,11 @@ class FederatedServer:
             "config": self.cfg.to_dict(),
             "hospital_contributions": self.hospital_contributions,
         }
-        with open(os.path.join(round_dir, "fl_metadata.json"), "w") as f:
+        meta_path = os.path.join(round_dir, "fl_metadata.json")
+        with open(meta_path, "w") as f:
             json.dump(metadata, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
         logger.info("Global model saved: %s", round_dir)
 

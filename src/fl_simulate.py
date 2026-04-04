@@ -83,9 +83,6 @@ class CheckpointManager:
         torch.save(weights, path)
 
         # Verify the file exists and is non-empty.
-        # We do NOT enforce a minimum byte threshold here because valid LoRA
-        # checkpoints can be arbitrarily small (e.g. tiny adapters, unit tests).
-        # The canonical guard against corruption is a load-back verification.
         if not os.path.exists(path):
             raise RuntimeError(f"Checkpoint save failed — file not created: {path}")
         size_bytes = os.path.getsize(path)
@@ -94,6 +91,17 @@ class CheckpointManager:
 
         with open(marker, "w") as f:
             f.write(str(round_num))
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Force checkpoint .pt file to disk so it survives a crash/disconnect.
+        # Without this, the OS may buffer the write and lose it on sudden exit.
+        try:
+            fd = os.open(path, os.O_RDONLY)
+            os.fsync(fd)
+            os.close(fd)
+        except OSError:
+            pass  # best-effort — some filesystems don't support fsync on read fd
 
         size_mb = size_bytes / (1024 * 1024)
         logger.info("Checkpoint saved & verified: round_%d.pt (%.3fMB)", round_num, size_mb)
@@ -378,9 +386,11 @@ def run_simulation(
             except Exception as _cb_exc:
                 logger.warning("on_round_end callback raised (non-fatal): %s", _cb_exc)
 
-        # Periodic model save
-        if (round_num + 1) % 5 == 0 or round_num == cfg.fl_rounds - 1:
-            server.save_global_model(tokenizer, round_num)
+        # Save LoRA adapter after EVERY round so it can be loaded for
+        # inference even if training is interrupted.  Previous behaviour
+        # (every 5th round) left a gap where the checkpoint .pt existed
+        # but the model files the eval cell needs did not.
+        server.save_global_model(tokenizer, round_num, cfg.global_model_dir)
 
         elapsed = time.time() - round_start
         rounds_done = round_num - start_round + 1
