@@ -56,11 +56,11 @@ md(
     "\n",
     "---\n",
     "## GPU unit budget (65 units)\n",
-    "| GPU | Units / hr | 20 rounds (est.) | Recommendation |\n",
+    "| GPU | Units / hr | 10 rounds (est.) | Recommendation |\n",
     "|-----|-----------|------------------|----------------|\n",
-    "| T4  | ~1.8      | ~10–13 units ✅  | **Use this** |\n",
-    "| L4  | ~2.8      | ~8–11 units ✅   | Also fine |\n",
-    "| A100 | ~9.6     | ~18–22 units ⚠️ | Not recommended |\n",
+    "| T4  | ~1.8      | ~5–7 units ✅    | **Use this** |\n",
+    "| L4  | ~2.8      | ~4–6 units ✅    | Also fine |\n",
+    "| A100 | ~9.6     | ~9–11 units ⚠️  | Not recommended |\n",
     "\n",
     "> **Before running:** Runtime → Change runtime type → **T4 GPU**\n",
 )
@@ -86,8 +86,7 @@ code(
     "\n",
     "# ── Mount Google Drive (for persistent checkpoints) ───────────────────────\n",
     "from google.colab import drive\n",
-    "if not os.path.ismount('/content/drive'):\n",
-    "    drive.mount('/content/drive')\n",
+    "drive.mount('/content/drive', force_remount=True)\n",
     "print('Drive : mounted')\n",
 )
 
@@ -151,7 +150,7 @@ md(
     "Uses the real typed `FLConfig` dataclasses from the repository.\n",
     "\n",
     "**Key parameters:**\n",
-    "- `fl_rounds` — number of federated rounds (20 = full run, 2 = quick test)\n",
+    "- `fl_rounds` — number of federated rounds (10 = full run, 2 = quick test)\n",
     "- `hospitals` — number of hospital clients (3 by default)\n",
     "- `dp.epsilon` — privacy budget (lower = more private, less accurate)\n",
     "- `adaptive_dp.enabled` — novel per-client adaptive noise allocation\n",
@@ -252,13 +251,43 @@ code(
     "print(f'  Checkpoints : {CKPT_DIR}')\n",
 )
 
-# ─── Cell 8: Step 4 header ────────────────────────────────────────────────────
-md(
-    "## Step 4 — Run federated training\n",
+# ─── Cell 8: Checkpoint status check ─────────────────────────────────────────
+md("## Step 4 — Check existing progress & run federated training\n")
+
+# ─── Cell 8b: Checkpoint status ───────────────────────────────────────────────
+code(
+    "# ── How many rounds already done? ───────────────────────────────────────\n",
+    "marker = os.path.join(CKPT_DIR, 'last_round.txt')\n",
+    "if os.path.exists(marker):\n",
+    "    with open(marker) as _f:\n",
+    "        _last = int(_f.read().strip())\n",
+    "    print(f'Checkpoint found — last completed round: {_last + 1} / {cfg.fl_rounds}')\n",
+    "    print(f'Training will RESUME from round {_last + 2}.')\n",
+    "else:\n",
+    "    print('No checkpoint found — training will START from round 1.')\n",
     "\n",
-    "Calls `run_simulation(cfg)` from `fl_simulate.py` in the cloned repo.  \n",
-    "All logic (FedAvg, adaptive DP, evaluation, checkpointing) runs from source.  \n",
-    "**Disconnected?** Click *Runtime → Run all* — resumes from the last checkpoint.\n",
+    "# ── List saved model rounds ───────────────────────────────────────────────\n",
+    "_mdir = cfg.global_model_dir\n",
+    "if os.path.exists(_mdir):\n",
+    "    _rounds = sorted(d for d in os.listdir(_mdir) if d.startswith('round_'))\n",
+    "    if _rounds:\n",
+    "        print(f'\\nSaved model rounds ({len(_rounds)} / {cfg.fl_rounds}):')\n",
+    "        for _r in _rounds:\n",
+    "            _sz = sum(\n",
+    "                os.path.getsize(os.path.join(_mdir, _r, _f))\n",
+    "                for _f in os.listdir(os.path.join(_mdir, _r))\n",
+    "            ) / (1024 * 1024)\n",
+    "            print(f'  {_r} — {_sz:.1f} MB')\n",
+    "    else:\n",
+    "        print('No model rounds saved yet.')\n",
+    "else:\n",
+    "    print('No model directory yet.')\n",
+    "\n",
+    "# ── Epoch breakdown ───────────────────────────────────────────────────────\n",
+    "print(f'\\nTraining plan:')\n",
+    "print(f'  {cfg.fl_rounds} rounds × {cfg.num_hospitals} hospitals × {cfg.local_epochs} local epoch(s)')\n",
+    "print(f'  Progress log format:  Round: X / {cfg.fl_rounds}')\n",
+    "print(f'  Each round = {100 / cfg.fl_rounds:.0f}% of total training')\n",
 )
 
 # ─── Cell 9: Training ─────────────────────────────────────────────────────────
