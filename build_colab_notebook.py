@@ -156,8 +156,27 @@ md(
     "- `adaptive_dp.enabled` — novel per-client adaptive noise allocation\n",
 )
 
+# ─── Recovery guard (reused in every cell that needs project modules) ────────
+RECOVERY = (
+    "# ── Auto-recovery: re-clone + re-add path if kernel restarted ───────────\n"
+    "import subprocess, sys, os as _os\n"
+    "_REPO = '/content/MEDTRACE'\n"
+    "_SRC  = f'{_REPO}/src'\n"
+    "if not _os.path.exists(_REPO):\n"
+    "    print('Kernel was restarted — re-cloning repository...')\n"
+    "    subprocess.run(['git','clone','--depth','1',\n"
+    "        'https://github.com/vivek797029/MEDTRACE.git', _REPO], check=True)\n"
+    "    subprocess.run([sys.executable,'-m','pip','install','-q','-r',\n"
+    "        f'{_REPO}/requirements.txt'], check=True)\n"
+    "    print('Re-clone complete.')\n"
+    "if _SRC not in sys.path:\n"
+    "    sys.path.insert(0, _SRC)\n"
+    "\n"
+)
+
 # ─── Cell 7: Configuration ────────────────────────────────────────────────────
 code(
+    RECOVERY,
     "import math\n",
     "from fl_config import (\n",
     "    FLConfig, DPConfig, AdaptiveDPConfig,\n",
@@ -292,6 +311,7 @@ code(
 
 # ─── Cell 9: Training ─────────────────────────────────────────────────────────
 code(
+    RECOVERY,
     "from fl_simulate import run_simulation, setup_logging\n",
     "import logging\n",
     "\n",
@@ -330,6 +350,7 @@ md(
 
 # ─── Cell 11: Plots ───────────────────────────────────────────────────────────
 code(
+    RECOVERY,
     "import matplotlib\n",
     "matplotlib.use('Agg')\n",
     "import matplotlib.pyplot as plt\n",
@@ -394,6 +415,7 @@ md(
 
 # ─── Cell 13: Load model + eval questions ─────────────────────────────────────
 code(
+    RECOVERY,
     "from transformers import AutoModelForCausalLM, AutoTokenizer\n",
     "from peft import PeftModel\n",
     "\n",
