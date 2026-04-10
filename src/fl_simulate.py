@@ -360,11 +360,14 @@ def run_simulation(
                 round_num + 1, len(failed_clients), len(hospitals), len(client_updates),
             )
 
-        # Record each client's training loss in the adaptive DP mechanism so
-        # it can weight the ε allocation for the next round.
-        if adaptive_dp is not None:
-            for hid, (_, metrics_dict) in client_updates.items():
-                adaptive_dp.record_loss(hid, metrics_dict.get("train_loss", float("inf")))
+        # Record each client's training loss in both the adaptive DP mechanism
+        # and the trust aggregator so both can weight allocations next round.
+        for hid, (_, metrics_dict) in client_updates.items():
+            loss_val = metrics_dict.get("train_loss", float("inf"))
+            if adaptive_dp is not None:
+                adaptive_dp.record_loss(hid, loss_val)
+            if server.trust_aggregator is not None:
+                server.trust_aggregator.record_loss(hid, loss_val)
 
         del shared_base
         if torch.cuda.is_available():
@@ -464,6 +467,8 @@ def run_simulation(
     report["eval_results"] = []          # filled in below if eval succeeds
     if adaptive_dp is not None:
         report["adaptive_dp_summary"] = adaptive_dp.summary()
+    if server.trust_aggregator is not None:
+        report["trust_agg_summary"] = server.trust_aggregator.summary()
 
     os.makedirs(cfg.metrics_dir, exist_ok=True)
     report_path = os.path.join(cfg.metrics_dir, "fl_training_report.json")

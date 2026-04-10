@@ -341,6 +341,73 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class TrustAggConfig:
+    """
+    Configuration for Trust-Weighted Federated Aggregation (TrustFedAvg).
+
+    When ``enabled=True``, FedAvg's sample-count-only weighting is replaced
+    by a multi-dimensional trust score that combines three signals:
+
+    1. **Cosine Alignment Score (CAS)** — directional agreement between a
+       client's update and the consensus update direction (previous round mean).
+       Penalises clients whose gradients point against the global trend.
+
+    2. **Loss-Convergence Score (LCS)** — softmax-normalised inverse training
+       loss.  Hospitals with lower loss (higher quality updates) receive more
+       influence; high-loss hospitals are down-weighted.
+
+    3. **Norm Consistency Score (NCS)** — MAD-based anomaly detection on
+       per-client update L2-norms.  Clients with abnormally large or small
+       update norms (Byzantine, poisoning, or instability) are penalised.
+
+    Combined: T_i = α_cas·CAS + α_lcs·LCS + α_ncs·NCS
+    Final weight: w_i = softmax(T_i / τ) · n_i / Σ softmax(T_j / τ) · n_j
+
+    Round 0 always falls back to standard FedAvg (no history for CAS yet).
+
+    Attributes
+    ----------
+    enabled:
+        Activate TrustFedAvg. Default False (preserves backward compat).
+    alpha_cas:
+        Weight for cosine alignment component (default 0.40).
+    alpha_lcs:
+        Weight for loss-convergence component (default 0.35).
+    alpha_ncs:
+        Weight for norm consistency component (default 0.25).
+    trust_temperature:
+        Softmax temperature τ. Higher → more uniform (approaches FedAvg).
+        Lower → sharper trust differentiation. Default 1.0.
+    min_trust:
+        Hard floor on any client's trust score to prevent full exclusion.
+        Default 0.05.
+    """
+    enabled: bool = False
+    alpha_cas: float = 0.40
+    alpha_lcs: float = 0.35
+    alpha_ncs: float = 0.25
+    trust_temperature: float = 1.0
+    min_trust: float = 0.05
+
+    def __post_init__(self):
+        for name, val in [
+            ("alpha_cas", self.alpha_cas),
+            ("alpha_lcs", self.alpha_lcs),
+            ("alpha_ncs", self.alpha_ncs),
+        ]:
+            if val < 0:
+                raise ValueError(f"TrustAggConfig.{name} must be ≥ 0, got {val}")
+        if self.trust_temperature <= 0:
+            raise ValueError(
+                f"trust_temperature must be > 0, got {self.trust_temperature}"
+            )
+        if not 0.0 < self.min_trust <= 1.0:
+            raise ValueError(
+                f"min_trust must be in (0, 1], got {self.min_trust}"
+            )
+
+
+@dataclass(frozen=True)
 class AdaptiveDPConfig:
     """
     Configuration for adaptive per-client differential privacy.
@@ -446,6 +513,7 @@ class FLConfig:
     lora: LoRAConfig = field(default_factory=LoRAConfig)
     dp: DPConfig = field(default_factory=DPConfig)
     adaptive_dp: AdaptiveDPConfig = field(default_factory=AdaptiveDPConfig)
+    trust_agg: TrustAggConfig = field(default_factory=TrustAggConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
@@ -475,8 +543,21 @@ class FLConfig:
             raise ValueError(f"fl_rounds must be positive, got {self.fl_rounds}")
         if self.local_epochs <= 0:
             raise ValueError(f"local_epochs must be positive, got {self.local_epochs}")
-        if self.aggregation_strategy not in ("fedavg",):
+        if self.aggregation_strategy not in ("fedavg", "trust_fedavg"):
             raise ValueError(f"Unknown aggregation: {self.aggregation_strategy}")
+        # Keep aggregation_strategy and trust_agg.enabled in sync for clarity
+        if self.aggregation_strategy == "trust_fedavg" and not self.trust_agg.enabled:
+            object.__setattr__(
+                self, "trust_agg",
+                TrustAggConfig(
+                    enabled=True,
+                    alpha_cas=self.trust_agg.alpha_cas,
+                    alpha_lcs=self.trust_agg.alpha_lcs,
+                    alpha_ncs=self.trust_agg.alpha_ncs,
+                    trust_temperature=self.trust_agg.trust_temperature,
+                    min_trust=self.trust_agg.min_trust,
+                )
+            )
 
     @property
     def num_hospitals(self) -> int:
@@ -554,6 +635,12 @@ class FLConfig:
             "adaptive_dp": {"enabled": self.adaptive_dp.enabled,
                             "ema_alpha": self.adaptive_dp.ema_alpha,
                             "min_epsilon_fraction": self.adaptive_dp.min_epsilon_fraction},
+            "trust_agg": {"enabled": self.trust_agg.enabled,
+                          "alpha_cas": self.trust_agg.alpha_cas,
+                          "alpha_lcs": self.trust_agg.alpha_lcs,
+                          "alpha_ncs": self.trust_agg.alpha_ncs,
+                          "trust_temperature": self.trust_agg.trust_temperature,
+                          "min_trust": self.trust_agg.min_trust},
             "training": {"lr": self.training.learning_rate,
                          "batch_size": self.training.batch_size,
                          "max_length": self.training.max_length},

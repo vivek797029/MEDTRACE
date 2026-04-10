@@ -35,6 +35,7 @@ from fl_config import (
     AggregationError, FLConfig, Metrics, WeightDict, config as default_config,
 )
 from fl_tracker import ExperimentTracker, NoOpTracker
+from fl_trust import TrustWeightedAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,32 @@ class FederatedServer:
         self.hospital_contributions: Dict[str, Metrics] = {}
         self.tracker: ExperimentTracker = tracker if tracker is not None else NoOpTracker()
 
-        logger.info("Aggregation server initialized | Strategy: %s | Hospitals: %d | Rounds: %d",
-                     cfg.aggregation_strategy, cfg.num_hospitals, cfg.fl_rounds)
+        # TrustFedAvg — instantiated here so per-client state persists
+        # across ALL rounds of the experiment (not re-created per round).
+        self.trust_aggregator: Optional[TrustWeightedAggregator] = None
+        if cfg.trust_agg.enabled:
+            self.trust_aggregator = TrustWeightedAggregator(
+                hospital_ids=list(cfg.hospitals.keys()),
+                alpha_cas=cfg.trust_agg.alpha_cas,
+                alpha_lcs=cfg.trust_agg.alpha_lcs,
+                alpha_ncs=cfg.trust_agg.alpha_ncs,
+                trust_temperature=cfg.trust_agg.trust_temperature,
+                min_trust=cfg.trust_agg.min_trust,
+            )
+
+        logger.info(
+            "Aggregation server initialized | Strategy: %s | Hospitals: %d | Rounds: %d",
+            cfg.aggregation_strategy, cfg.num_hospitals, cfg.fl_rounds,
+        )
         if cfg.dp.enabled:
             logger.info("Differential Privacy: ON (eps=%.1f) | Secure Aggregation: %s",
                         cfg.dp.epsilon, "ON" if cfg.dp.secure_aggregation else "OFF")
+        if cfg.trust_agg.enabled:
+            logger.info(
+                "TrustFedAvg: ON | α_cas=%.2f α_lcs=%.2f α_ncs=%.2f τ=%.2f",
+                cfg.trust_agg.alpha_cas, cfg.trust_agg.alpha_lcs,
+                cfg.trust_agg.alpha_ncs, cfg.trust_agg.trust_temperature,
+            )
 
     # ─── LoRA Helper (DRY — single source of truth) ───────────
 
@@ -177,8 +199,20 @@ class FederatedServer:
         if total_samples == 0:
             raise AggregationError("All clients reported 0 training samples")
 
-        for hospital_id, (_, metrics) in client_updates.items():
-            fracs[hospital_id] = metrics["num_samples"] / total_samples
+        # ── Compute aggregation weights ──────────────────────────────────────
+        # TrustFedAvg: multi-dimensional trust score modulates data-fraction
+        # Standard FedAvg: weight proportional to sample count only
+        if self.trust_aggregator is not None:
+            fracs = self.trust_aggregator.compute_weights(client_updates, round_num)
+            # Log trust metrics to tracker
+            trust_metrics = self.trust_aggregator.trust_log_dict(fracs, round_num)
+            if trust_metrics:
+                self.tracker.log(trust_metrics, step=round_num)
+            logger.info("TrustFedAvg weights: %s",
+                        {hid: f"{w:.4f}" for hid, w in fracs.items()})
+        else:
+            for hospital_id, (_, metrics) in client_updates.items():
+                fracs[hospital_id] = metrics["num_samples"] / total_samples
 
         # ── Phase 2: streaming weighted average ─────────────────────────────
         # Weights are accumulated one client at a time; no full list is kept in
@@ -484,8 +518,11 @@ class FederatedServer:
         Returns copies of internal metric collections so that callers cannot
         accidentally mutate server state by appending to the returned lists/dicts.
         """
-        return {
+        report = {
             "config": self.cfg.to_dict(),
             "round_metrics": list(self.round_metrics),
             "hospital_contributions": dict(self.hospital_contributions),
         }
+        if self.trust_aggregator is not None:
+            report["trust_agg_summary"] = self.trust_aggregator.summary()
+        return report
