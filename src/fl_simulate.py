@@ -455,23 +455,37 @@ def run_simulation(
     ]
     eval_questions = cfg.eval.eval_questions or _DEFAULT_EVAL_QUESTIONS
 
+    # ─── Report (saved NOW before any risky GPU ops) ──────────
+    # Generate and persist training metrics immediately so they survive
+    # even if the final model save or evaluation crashes.
+    report = server.generate_report()
+    report["total_training_time"] = round(total_elapsed, 2)
+    report["all_round_metrics"] = all_round_metrics
+    report["eval_results"] = []          # filled in below if eval succeeds
+    if adaptive_dp is not None:
+        report["adaptive_dp_summary"] = adaptive_dp.summary()
+
+    os.makedirs(cfg.metrics_dir, exist_ok=True)
+    report_path = os.path.join(cfg.metrics_dir, "fl_training_report.json")
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2, default=str)
+    logger.info("Training report saved: %s", report_path)
+
+    # ─── Final model save (non-fatal) ─────────────────────────
     try:
         server.save_global_model(tokenizer, cfg.fl_rounds - 1, cfg.global_model_dir)
     except Exception as _final_save_exc:
         logger.error("Final save_global_model failed: %s", _final_save_exc)
-    eval_results = server.evaluate_global(tokenizer, eval_questions)
 
-    # ─── Report ───────────────────────────────────────────────
-    report = server.generate_report()
-    report["total_training_time"] = round(total_elapsed, 2)
-    report["eval_results"] = eval_results
-    report["all_round_metrics"] = all_round_metrics
-    if adaptive_dp is not None:
-        report["adaptive_dp_summary"] = adaptive_dp.summary()
-
-    report_path = os.path.join(cfg.metrics_dir, "fl_training_report.json")
-    with open(report_path, "w") as f:
-        json.dump(report, f, indent=2, default=str)
+    # ─── Final evaluation (non-fatal) ─────────────────────────
+    try:
+        eval_results = server.evaluate_global(tokenizer, eval_questions)
+        report["eval_results"] = eval_results
+        # Update JSON with eval results
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2, default=str)
+    except Exception as _eval_exc:
+        logger.error("Final evaluation failed (non-fatal): %s", _eval_exc)
 
     logger.info("=" * 60)
     logger.info("TRAINING COMPLETE | Total: %.1fs | Report: %s", total_elapsed, report_path)
