@@ -73,9 +73,22 @@ class FederatedServer:
             task_type=self.cfg.lora.task_type,
         )
 
-    def _load_peft_model(self, weights: Optional[WeightDict] = None):
-        """Load base model with LoRA, optionally inject weights. Caller owns cleanup."""
-        base = AutoModelForCausalLM.from_pretrained(self.cfg.base_model, torch_dtype=torch.float32)
+    def _load_peft_model(self, weights: Optional[WeightDict] = None,
+                         dtype=None):
+        """Load base model with LoRA, optionally inject weights. Caller owns cleanup.
+
+        Args:
+            weights: LoRA state dict to inject (if any).
+            dtype: torch dtype override. Defaults to float32 for training
+                   precision. Use float16 for save/eval to halve RAM usage.
+        """
+        if dtype is None:
+            dtype = torch.float32
+        base = AutoModelForCausalLM.from_pretrained(
+            self.cfg.base_model,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
         model = get_peft_model(base, self._make_lora_config())
         if weights is not None:
             model.load_state_dict(weights, strict=False)
@@ -327,8 +340,22 @@ class FederatedServer:
         round_dir = os.path.join(save_dir, f"round_{round_num}")
         os.makedirs(round_dir, exist_ok=True)
 
-        model = self._load_peft_model(self.global_weights)
+        # Free any lingering memory before loading the base model.
+        # Use float16 (not float32) to halve RAM usage — the base model
+        # is only needed to structure the LoRA save; precision doesn't
+        # matter here.  float32 loading was the root cause of OOM crashes
+        # on Colab free tier (12.7 GB RAM).
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        model = self._load_peft_model(self.global_weights, dtype=torch.float16)
         model.save_pretrained(round_dir)
+
+        del model
+        gc.collect()
+
         tokenizer.save_pretrained(round_dir)
 
         metadata = {
@@ -373,9 +400,6 @@ class FederatedServer:
             round_dir, len(saved_files), size_mb,
         )
 
-        del model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
         return round_dir
 
     def evaluate_global(self, tokenizer: AutoTokenizer,
@@ -394,7 +418,11 @@ class FederatedServer:
         n = min(max_eval, len(eval_questions))
         logger.info("Evaluating global model on %d/%d questions...", n, len(eval_questions))
 
-        model = self._load_peft_model(self.global_weights)
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        model = self._load_peft_model(self.global_weights, dtype=torch.float16)
         model.to(self.device)
         model.eval()
 
