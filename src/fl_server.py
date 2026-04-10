@@ -319,7 +319,10 @@ class FederatedServer:
 
     def save_global_model(self, tokenizer: AutoTokenizer, round_num: int,
                           save_dir: Optional[str] = None) -> str:
-        """Save the aggregated global model as a LoRA adapter."""
+        """Save the aggregated global model as a LoRA adapter.
+
+        Every file is verified and fsync'd to survive Colab/Kaggle disconnects.
+        """
         save_dir = save_dir or self.cfg.global_model_dir
         round_dir = os.path.join(save_dir, f"round_{round_num}")
         os.makedirs(round_dir, exist_ok=True)
@@ -339,7 +342,36 @@ class FederatedServer:
             f.flush()
             os.fsync(f.fileno())
 
-        logger.info("Global model saved: %s", round_dir)
+        # ── Verify & fsync ALL saved files ────────────────────────
+        saved_files = [
+            f for f in os.listdir(round_dir)
+            if os.path.isfile(os.path.join(round_dir, f))
+        ]
+        if not saved_files:
+            raise RuntimeError(
+                f"save_global_model: no files written to {round_dir}"
+            )
+
+        total_bytes = 0
+        for fname in saved_files:
+            fpath = os.path.join(round_dir, fname)
+            fsize = os.path.getsize(fpath)
+            if fsize == 0 and fname != "__init__.py":
+                logger.warning("Zero-byte file after save: %s", fpath)
+            total_bytes += fsize
+            # Force each file to disk (survives Colab/Kaggle disconnect)
+            try:
+                fd = os.open(fpath, os.O_RDONLY)
+                os.fsync(fd)
+                os.close(fd)
+            except OSError:
+                pass  # best-effort — some FS don't support fsync on read fd
+
+        size_mb = total_bytes / (1024 * 1024)
+        logger.info(
+            "Global model saved & verified: %s (%d files, %.1f MB)",
+            round_dir, len(saved_files), size_mb,
+        )
 
         del model
         if torch.cuda.is_available():

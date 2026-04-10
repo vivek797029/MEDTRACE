@@ -390,7 +390,17 @@ def run_simulation(
         # inference even if training is interrupted.  Previous behaviour
         # (every 5th round) left a gap where the checkpoint .pt existed
         # but the model files the eval cell needs did not.
-        server.save_global_model(tokenizer, round_num, cfg.global_model_dir)
+        #
+        # Wrapped in try/except so a save failure (OOM, disk full, etc.)
+        # does NOT crash the training loop — the checkpoint .pt is already
+        # safely on disk from ckpt.save() above.
+        try:
+            server.save_global_model(tokenizer, round_num, cfg.global_model_dir)
+        except Exception as _save_exc:
+            logger.warning(
+                "save_global_model failed for round %d (non-fatal — "
+                "checkpoint .pt is safe): %s", round_num, _save_exc
+            )
 
         elapsed = time.time() - round_start
         rounds_done = round_num - start_round + 1
@@ -445,7 +455,10 @@ def run_simulation(
     ]
     eval_questions = cfg.eval.eval_questions or _DEFAULT_EVAL_QUESTIONS
 
-    server.save_global_model(tokenizer, cfg.fl_rounds - 1, cfg.global_model_dir)
+    try:
+        server.save_global_model(tokenizer, cfg.fl_rounds - 1, cfg.global_model_dir)
+    except Exception as _final_save_exc:
+        logger.error("Final save_global_model failed: %s", _final_save_exc)
     eval_results = server.evaluate_global(tokenizer, eval_questions)
 
     # ─── Report ───────────────────────────────────────────────
