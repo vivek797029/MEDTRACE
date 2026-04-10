@@ -347,14 +347,22 @@ class FederatedServer:
         # on Colab free tier (12.7 GB RAM).
         import gc
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass  # GPU context may be corrupt after training — safe to ignore
 
         model = self._load_peft_model(self.global_weights, dtype=torch.float16)
         model.save_pretrained(round_dir)
 
         del model
         gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
         tokenizer.save_pretrained(round_dir)
 
@@ -420,8 +428,11 @@ class FederatedServer:
 
         import gc
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
         model = self._load_peft_model(self.global_weights, dtype=torch.float16)
         model.to(self.device)
         model.eval()
